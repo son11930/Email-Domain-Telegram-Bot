@@ -16,6 +16,12 @@
 - ขั้นตอน: code review, database review, security review และ performance review → เพิ่ม regression tests ก่อนการแก้ → แก้ findings → รันชุดทดสอบที่เกี่ยวข้องและชุดหลัก → อัปเดต CHANGELOG
 - ข้อจำกัด: ไม่ใช้ credentials จริง, ไม่แตะข้อมูล production, ไม่ deploy VPS และไม่เปลี่ยนพฤติกรรมระบบที่ไม่มีหลักฐานรองรับ
 
+## งานปัจจุบัน: เตรียมติดตั้งบน VPS และเพิ่มคำสั่งอัปเดตจาก Windows
+
+- สถานะ: ตรวจสภาพ VPS แล้ว; เริ่มติดตั้งได้หลังจัดเตรียม Python 3.11; จะหยุดก่อน `.env` เพื่อให้เจ้าของใส่ secrets เอง
+- ขอบเขต: clone repo ลง `/opt/team-mail-bot`, สร้างบัญชี service, ติดตั้ง Screen/virtualenv/systemd และเพิ่มเมนู `git pull` + restart ใน `bot-manager.bat`
+- ข้อจำกัด: ไม่อ่าน/สร้าง secrets, ไม่เปิดพอร์ต 8000, ไม่ตั้งค่า/ทดสอบธุรกรรมจริง
+
 ## งานเพิ่มเติม: เปลี่ยนวิธีรัน VPS เป็น screen
 
 - สถานะ: เสร็จแล้ว อัปเดตคู่มือติดตั้ง/ดูแลระบบและ source archive แล้ว

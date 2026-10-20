@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Batched email inventory imports, allowed concurrent purchases to share the price read lock, and removed duplicate order completion work and quadratic payment-history accumulation.
 - Replaced Telegram summary reads with focused price and stock queries and moved user/email search filtering into SQL.
 - Added the versioned PostgreSQL column-width migration and VPS manager to the explicitly allowed source release archive.
+- Added a Windows manager action that fast-forward pulls `main`, installs locked dependencies, runs idempotent DB initialization, and restarts all three VPS services over SSH.
 
 ### Changed
 - Switched the documented VPS run path from Docker Compose to three GNU Screen sessions for the bot, worker, and web; added systemd start/status/log/stop/restart guidance for boot startup and process recovery.
