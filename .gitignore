@@ -1,0 +1,48 @@
+# Environments
+.env
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Gemini/ECC / AI Tools
+.gemini/
+.agents/
+.codex/
+.codex-plugin/
+AGENTS.md
+RULES.md
+RULES discord.md
+agents/
+commands/
+hooks/
+mcp-configs/
+rules/
+scripts/
+skills/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Tests
+.coverage
+.pytest_cache/
+htmlcov/
+coverage.xml
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+.codex-remote-attachments/
+.tools/
+*.db
+*.sqlite*
+backups/
+logs/
+*.log
+.env.*

@@ -1,0 +1,19 @@
+[Unit]
+Description=Team Mail %i service in GNU Screen
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=team-mail
+Group=team-mail
+WorkingDirectory=/opt/team-mail-bot
+ExecStart=/bin/bash /opt/team-mail-bot/deploy/run-screen-service.sh %i
+ExecStop=/bin/bash /opt/team-mail-bot/deploy/stop-screen-service.sh %i
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target
