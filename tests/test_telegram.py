@@ -245,6 +245,70 @@ def test_credit_preview_requires_reason_and_checks_atomic_expected_balance():
     svc.get_user.return_value = {'balance_units': 9}
     run(controller.callback(callback('confirm:' + ui.data['nonce'], 99), ui))
     assert svc.adjust_credit.call_count == 1
+
+
+def test_credit_adjustment_accepts_id_then_amount_and_generates_audit_reason():
+    svc, ui = service(), MemoryState()
+    svc.adjust_credit = Mock()
+    controller = TelegramController(svc, settings())
+
+    run(controller.message(message(99, '7'), ui := MemoryState('admin_credit')))
+    assert ui.name == 'admin_credit_amount'
+    assert ui.data['credit_user_id'] == 7
+    svc.adjust_credit.assert_not_called()
+
+    run(controller.message(message(99, '1.5'), ui))
+    assert svc.adjust_credit.call_count == 0
+    assert ui.data['operation'] == 'credit'
+    assert ui.data['units'] == 150_000_000
+    assert ui.data['mode'] == 'delta'
+
+    run(controller.callback(callback('confirm:' + ui.data['nonce'], 99), ui))
+    svc.adjust_credit.assert_called_once()
+    args, kwargs = svc.adjust_credit.call_args
+    assert args[:2] == (99, 7)
+    assert kwargs['delta_units'] == 150_000_000
+    assert kwargs['expected_balance_units'] == 100_000_000
+    assert kwargs['reason']
+
+
+def test_credit_adjustment_accepts_id_and_signed_amount_in_one_message():
+    svc, ui = service(), MemoryState('admin_credit')
+    svc.adjust_credit = Mock()
+    controller = TelegramController(svc, settings())
+
+    run(controller.message(message(99, '7 -0.5'), ui))
+    assert svc.adjust_credit.call_count == 0
+    assert ui.data['units'] == -50_000_000
+    assert ui.data['mode'] == 'delta'
+    run(controller.callback(callback('confirm:' + ui.data['nonce'], 99), ui))
+    assert svc.adjust_credit.call_args.kwargs['delta_units'] == -50_000_000
+
+    svc.get_user.return_value = {'balance_units': 100_000_000}
+    retry_ui = MemoryState('admin_credit')
+    run(controller.message(message(99, '7 -2'), retry_ui))
+    assert svc.adjust_credit.call_count == 1
+    assert retry_ui.name == 'admin_credit'
+    run(controller.message(message(99, '7 1'), retry_ui))
+    run(controller.callback(callback('confirm:' + retry_ui.data['nonce'], 99), retry_ui))
+    assert svc.adjust_credit.call_count == 2
+
+
+def test_selecting_new_credit_user_invalidates_previous_confirmation():
+    svc, ui = service(), MemoryState('admin_credit')
+    svc.adjust_credit = Mock()
+    controller = TelegramController(svc, settings())
+
+    run(controller.message(message(99, '7 1'), ui))
+    previous_nonce = ui.data['nonce']
+    run(controller.message(message(99, '8'), ui))
+    assert ui.name == 'admin_credit_amount'
+    run(controller.callback(callback('confirm:' + previous_nonce, 99), ui))
+    svc.adjust_credit.assert_not_called()
+
+    run(controller.message(message(99, '2'), ui))
+    run(controller.callback(callback('confirm:' + ui.data['nonce'], 99), ui))
+    assert svc.adjust_credit.call_args.args[:2] == (99, 8)
     for invalid in ['abc', '1 target -1 bad reason', '1 delta -10 good reason', '1 delta 1 x']:
         run(controller.message(message(99, invalid), MemoryState('admin_credit')))
     assert svc.adjust_credit.call_count == 1

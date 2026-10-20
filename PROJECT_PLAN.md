@@ -91,3 +91,12 @@
 - แนวทาง: Nginx รับ public traffic บน 80/443 และ proxy ไป web ที่ `127.0.0.1:8001`; Certbot ใช้ Let's Encrypt short-lived IP certificate พร้อม auto-renew/reload
 - ตรวจสอบ: GET จากภายนอกไป HTTP ได้ 301 ไป HTTPS; HTTPS ได้ 200 พร้อม trusted chain; timer เปิดใช้งานและ deploy hook reload Nginx
 - ข้อจำกัด: certificate มีอายุประมาณ 160 ชั่วโมงและอาศัย auto-renew; ไม่เปลี่ยน listener ที่พอร์ต 8000 และไม่เปิด 8001 สู่ภายนอก
+
+## งานเพิ่มเติม: ทำคำสั่งแอดมินปรับเครดิตให้กรอกง่าย
+
+- สถานะ: เสร็จแล้ว (2026-10-21); tests Telegram ผ่านและ full suite ผ่าน 147 tests (6 PostgreSQL integration tests ข้ามเพราะไม่มี TEST_DATABASE_URL)
+- ปัญหา: คำสั่งเดิมบังคับกรอก `USER_ID delta|target จำนวน เหตุผล` ในข้อความเดียว ทำให้ส่ง Telegram ID อย่างเดียวแล้วถูกปฏิเสธ
+- เป้าหมาย: หลังเลือกปรับเครดิต ให้กรอก Telegram ID แล้วกรอกจำนวนเครดิตในข้อความถัดไป; บวกเพื่อเพิ่ม ลบเพื่อหัก และมีหน้าตรวจยอด/ปุ่มยืนยัน
+- ข้อกำหนด: คง admin-only, ตรวจผู้ใช้และจำนวน, คง expected-balance guard, request idempotency, ledger/audit โดยใส่เหตุผลมาตรฐานอัตโนมัติ
+- ผล: รองรับทั้ง `ID จำนวน` และการส่ง ID ก่อนแล้วค่อยส่งจำนวน; จำนวนบวกเพิ่ม จำนวนลบหัก; เหตุผล audit สร้างอัตโนมัติ และยังต้องยืนยัน/ตรวจยอดเดิมก่อนบันทึก
+- ขั้นตอน: เพิ่ม regression tests ก่อน → ปรับ handler/state/prompt → รันทดสอบ Telegram และชุดหลัก → อัปเดต CHANGELOG

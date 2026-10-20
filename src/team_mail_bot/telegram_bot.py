@@ -138,6 +138,8 @@ class TelegramController:
                 return await self.import_preview(message, state)
             if current == 'admin_credit':
                 return await self.credit_preview(message, state, text)
+            if current == 'admin_credit_amount':
+                return await self.credit_amount_preview(message, state, text)
             if current == 'admin_delete':
                 return await self.delete_preview(message, state, text)
             await self.say(message, 'ใช้ /start เพื่อเปิดเมนู หรือ /cancel เพื่อยกเลิก')
@@ -273,8 +275,8 @@ class TelegramController:
     async def admin(self, message, state, action):
         modes = {'admin:import': ('admin_import', ('ส่งข้อความหรือไฟล์ .txt UTF-8 ไม่เกิน 500 KB\n'
                                  'รองรับ email|password ระบบจะเก็บเฉพาะเมล ไม่ต้องส่งรหัสผ่านหากแยกแล้ว')),
-                 'admin:credit': ('admin_credit', ('พิมพ์: USER_ID delta +1.5 เหตุผล\n'
-                                  'หรือ USER_ID target 5 เหตุผล')),
+                 'admin:credit': ('admin_credit', ('ส่ง Telegram ID และจำนวนเครดิต เช่น 6450298295 1.5\n'
+                                  'หรือส่ง ID ก่อน แล้วค่อยส่งจำนวนเครดิต (ใส่ - เพื่อลด)')),
                  'admin:delete': ('admin_delete', 'พิมพ์: EMAIL_ID เหตุผลในการลบ\nลบได้เฉพาะเมลพร้อมขาย')}
         await state.clear()
         if action in modes:
@@ -310,19 +312,60 @@ class TelegramController:
 
     async def credit_preview(self, message, state, text):
         parts = text.split(maxsplit=3)
-        if len(parts) != 4 or not parts[0].isdigit() or parts[1] not in ('delta', 'target'):
+        if not parts or not re.fullmatch(r'\d{1,20}', parts[0]):
             raise ValueError('credit')
-        target_id, mode, amount, reason = parts
+        target_id = int(parts[0])
+        if target_id <= 0 or target_id > 2**63 - 1:
+            raise ValueError('credit user id')
+        await state.clear()
+        await state.set_state('admin_credit')
+        if len(parts) == 1:
+            await self.call('get_user', target_id)
+            await state.set_state('admin_credit_amount')
+            await state.update_data(credit_user_id=target_id)
+            return await self.say(message, f'ผู้ใช้ {target_id}\nส่งจำนวนเครดิตที่ต้องการปรับ '
+                           '(เช่น 5 เพิ่มเครดิต, -1 หักเครดิต)')
+        if len(parts) == 2:
+            _, amount = parts
+            mode, reason = 'delta', 'ปรับเครดิตผ่าน Telegram โดยแอดมิน'
+        elif len(parts) == 4 and parts[1] in ('delta', 'target'):
+            _, mode, amount, reason = parts
+            if not 3 <= len(reason) <= 300:
+                raise ValueError('reason')
+        else:
+            raise ValueError('credit')
         units = parse_amount(amount, signed=mode == 'delta') if amount != '0' else 0
-        if not 3 <= len(reason) <= 300:
-            raise ValueError('reason')
-        user = await self.call('get_user', int(target_id))
-        before = user['balance_units']
+        if mode == 'delta' and units == 0:
+            raise ValueError('zero credit adjustment')
+        user = await self.call('get_user', target_id)
+        await self.show_credit_confirmation(message, state, target_id, mode, units,
+                                            reason, user['balance_units'])
+
+    async def credit_amount_preview(self, message, state, text):
+        data = await state.get_data()
+        target_id = data.get('credit_user_id')
+        if not isinstance(target_id, int) or target_id <= 0:
+            await state.clear()
+            return await self.say(message, 'ขั้นตอนหมดอายุ กรุณาเริ่มปรับเครดิตใหม่')
+        try:
+            units = parse_amount(text, signed=True)
+        except ValueError:
+            return await self.say(message, 'จำนวนเครดิตไม่ถูกต้อง เช่น 5 เพื่อเพิ่ม หรือ -1 เพื่อลด')
+        if units == 0:
+            return await self.say(message, 'จำนวนเครดิตต้องไม่เป็นศูนย์')
+        user = await self.call('get_user', target_id)
+        await self.show_credit_confirmation(message, state, target_id, 'delta', units,
+                                            'ปรับเครดิตผ่าน Telegram โดยแอดมิน',
+                                            user['balance_units'])
+
+    async def show_credit_confirmation(self, message, state, target_id, mode, units, reason, before):
         after = units if mode == 'target' else before + units
         if after < 0:
-            raise ValueError('negative')
+            return await self.say(message, 'หักเครดิตไม่ได้ เพราะยอดคงเหลือจะติดลบ')
         nonce = uuid4().hex[:16]
-        await state.update_data(operation='credit', nonce=nonce, user_id=int(target_id),
+        await state.clear()
+        await state.set_state('admin_credit')
+        await state.update_data(operation='credit', nonce=nonce, user_id=target_id,
                                 mode=mode, units=units, reason=reason, balance=before)
         await self.say(message, f'ผู้ใช้ {target_id}\nยอดเดิม {format_units(before)} → '
                        f'{format_units(after)} credit\nเหตุผล: {reason}',
