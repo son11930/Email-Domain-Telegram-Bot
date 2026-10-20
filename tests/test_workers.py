@@ -21,17 +21,39 @@ def test_split_rejects_oversized_email():
 
 
 def test_discord_contains_no_mentions_or_email_inventory():
+    sent = []
     def respond(request):
         import json
         payload = json.loads(request.content)
+        sent.append(payload['content'])
         assert payload['allowed_mentions'] == {'parse': []}
         assert 'stolen@example.org' not in str(payload)
         assert request.url.params['wait'] == 'true'
         return httpx.Response(200, json={'id': '123'})
     client = httpx.Client(transport=httpx.MockTransport(respond))
     notifier = DiscordNotifier('https://discord.com/api/webhooks/1/token', 'https://discord.com/api/webhooks/2/token', client=client)
-    notifier.send('discord_order', {'order_id': 'abc', 'user_id': 42, 'quantity': 1,
-                                  'total_units': 30000000, 'emails': ['stolen@example.org']})
+    notifier.send('discord_order', {'order_id': 'abc', 'user_id': 42, 'user_name': 'Team\n@everyone',
+        'quantity': 1, 'total_units': 30000000, 'balance_units': 20000000,
+        'status': 'success', 'emails': ['stolen@example.org']})
+    assert 'Team @everyone (ID 42)' in sent[0]
+    assert 'pending' not in sent[0]
+    assert 'สำเร็จ' in sent[0]
+    notifier.send('discord_topup', {'topup_id': 'topup', 'user_id': 42,
+        'user_name': 'Team\nMember', 'amount_units': 100000000, 'balance_units': 120000000})
+    assert 'Team Member (ID 42)' in sent[1]
+
+
+def test_discord_order_failure_message_is_explicit():
+    sent = []
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: (
+        sent.append(request.content.decode()) or httpx.Response(200))))
+    notifier = DiscordNotifier('https://discord.com/api/webhooks/1/token',
+        'https://discord.com/api/webhooks/2/token', client=client)
+    notifier.send('discord_order', {'order_id': 'abc', 'user_id': 42, 'user_name': 'Team',
+        'quantity': 1, 'total_units': 30000000, 'balance_units': 100000000,
+        'status': 'refunded', 'failure_reason': 'returned'})
+    assert 'ยกเลิก / คืนเครดิต' in sent[0]
+    assert 'รายละเอียด: returned' in sent[0]
 
 
 def test_discord_rate_limit_uses_retry_after_and_safe_error():
@@ -70,11 +92,15 @@ def test_order_expands_one_file_and_all_text_idempotent_keys():
 
 
 def test_transport_error_retries_same_part_without_purchase():
+    from unittest.mock import Mock
+
     service = FakeService([{'id': 3, 'topic': 'telegram_text', 'payload': {'user_id': 42, 'text': 'a@example.org', 'order_id': 'o'}, 'attempts': 1}])
     bot = SimpleNamespace(send_message=AsyncMock(side_effect=RuntimeError('sensitive transport data')))
-    asyncio.run(OutboxWorker(service, bot, SimpleNamespace()).run_once())
+    discord = Mock()
+    asyncio.run(OutboxWorker(service, bot, discord).run_once())
     assert service.finished[0][1] is False
     assert 'sensitive' not in service.finished[0][2]
+    discord.send.assert_not_called()
 
 
 def test_file_delivery_contains_only_email_lines():

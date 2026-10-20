@@ -109,3 +109,13 @@
 - ขอบเขต: ไม่ปิด `StrictHostKeyChecking`, ไม่บันทึก private key/ข้อมูลลับลง repo, คำสั่ง SSH ทุกเมนูใช้ตัวเลือกชุดเดียวกัน
 - วิธีตรวจ: ตรวจทุก invocation ของ ssh ใน batch file ให้ใช้ known_hosts เดียวกันและ `StrictHostKeyChecking=yes`; ตรวจ whitespace ด้วย `git diff --check`
 - ผล: เพิ่ม override `TEAM_MAIL_SSH_KNOWN_HOSTS`, fallback ไปยัง `%USERPROFILE%\.ssh\known_hosts`, ปฏิเสธการเชื่อมต่อเมื่อไม่มีไฟล์ และกำหนด host-key verification ในทุกเมนู SSH
+
+## งานเพิ่มเติม: แจ้งผลคำสั่งซื้อใน Discord และแสดงชื่อผู้ใช้
+
+- สถานะ: เสร็จแล้ว (2026-10-21)
+- ปัญหา: Discord ได้รับ event สถานะส่ง `pending` ตอนสั่งซื้อ แต่ไม่มี event success เมื่อ Telegram ส่งเมลครบ และแจ้งเฉพาะ Telegram ID
+- เป้าหมาย: ไม่ส่ง pending order notification; ส่ง success เมื่อการส่งอีเมลครบทุกส่วน, ส่งสถานะยกเลิก/คืนเครดิตเมื่อแอดมินคืนรายการ และแสดงชื่อผู้ใช้คู่กับ Telegram ID ทั้งรายการซื้อและเติมเครดิต
+- ข้อกำหนด: คง durable outbox/idempotency; หยุดส่ง legacy pending order events ที่ยังค้าง; ไม่เผยอีเมลหรือรหัสผ่านใน Discord
+- หมายเหตุ: ความล้มเหลวชั่วคราวของ Telegram จะ retry ตามกลไกเดิม จึงยังไม่ถือเป็น terminal failure; Discord แจ้งไม่สำเร็จเมื่อรายการถูกคืนเครดิต/ยกเลิกโดยแอดมิน
+- ผล: ย้าย success event ไปหลังส่งเมลครบ, เพิ่ม failure event ตอนคืนเครดิต, รวมชื่อกับ ID ในรายการซื้อ/เติมเงิน และปิด legacy pending order events ที่ยังค้างใน outbox
+- ขั้นตอน: เพิ่ม regression tests ก่อน → เปลี่ยน enqueue จุดส่ง Discord → เพิ่มชื่อจาก User → ทดสอบ worker/core/e2e → อัปเดต CHANGELOG

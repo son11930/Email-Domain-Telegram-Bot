@@ -4,7 +4,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from sqlalchemy import String, cast, func, or_, select
+from sqlalchemy import String, cast, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -317,8 +317,6 @@ class AppService:
                 email.status = 'allocated'
                 session.add(OrderItem(order_id=order_id, email_id=email.id))
             self._enqueue(session, 'telegram_order', {'order_id': order_id, 'user_id': user_id}, 'telegram_order:' + order_id)
-            self._enqueue(session, 'discord_order', {'order_id': order_id, 'user_id': user_id, 'quantity': quantity,
-                          'total_units': total, 'balance_units': user.balance_units, 'status': 'pending'}, 'discord_order:' + order_id)
             session.flush()
             return self._order(session, order)
 
@@ -342,6 +340,12 @@ class AppService:
                 return {'order_id': order_id, 'status': 'refunded', 'balance_units': previous.after_units}
             self._ledger(session, user, order.total_units, reference, reason, actor_id)
             order.status = 'refunded'
+            self._enqueue(session, 'discord_order', {
+                'order_id': order.id, 'user_id': user.id, 'user_name': user.name,
+                'quantity': order.quantity, 'total_units': order.total_units,
+                'balance_units': user.balance_units, 'status': 'refunded',
+                'failure_reason': reason},
+                'discord_order:refunded:' + order_id)
             deliveries = session.scalars(select(Outbox).where(
                 Outbox.topic.in_(['telegram_order', 'telegram_text', 'telegram_document']),
                 Outbox.payload['order_id'].as_string() == order_id).with_for_update())
@@ -385,6 +389,7 @@ class AppService:
                 candidate.status = 'paid'
                 payment.topup_id = candidate.id
             payload = {'topup_id': candidate.id if candidate else transaction_id, 'user_id': user_id,
+                       'user_name': user.name,
                        'amount_units': payment.amount_units, 'balance_units': user.balance_units}
             self._enqueue(session, 'telegram_topup', payload, 'telegram_review:' + transaction_id)
             self._enqueue(session, 'discord_topup', payload, 'discord_review:' + transaction_id)
@@ -460,7 +465,7 @@ class AppService:
 
     def _mark_order_delivered(self, session, order_id):
         order = session.scalar(select(Order).where(Order.id == order_id).with_for_update())
-        if order is None or order.status == 'refunded':
+        if order is None or order.status in ('refunded', 'delivered'):
             return
         rows = list(session.scalars(select(Outbox).where(
             Outbox.topic.in_(['telegram_order', 'telegram_text', 'telegram_document']),
@@ -468,6 +473,12 @@ class AppService:
         parts = [row for row in rows if row.topic != 'telegram_order']
         if parts and all(row.status == 'done' for row in rows):
             order.status = 'delivered'
+            user = session.get(User, order.user_id)
+            self._enqueue(session, 'discord_order', {
+                'order_id': order.id, 'user_id': user.id, 'user_name': user.name,
+                'quantity': order.quantity, 'total_units': order.total_units,
+                'balance_units': order.balance_units, 'status': 'success'},
+                'discord_order:' + order.id)
 
     def mark_order_delivered(self, order_id):
         with self.factory.begin() as session:
@@ -499,7 +510,8 @@ class AppService:
                 self._ledger(session, user, amount_units, 'payment:' + transaction_id, 'USDT topup')
                 candidate.status = 'paid'
                 payment.status, payment.topup_id = 'paid', candidate.id
-                payload = {'topup_id': candidate.id, 'user_id': user.id, 'amount_units': amount_units,
+                payload = {'topup_id': candidate.id, 'user_id': user.id, 'user_name': user.name,
+                           'amount_units': amount_units,
                            'balance_units': user.balance_units}
                 self._enqueue(session, 'telegram_topup', payload, 'telegram_topup:' + candidate.id)
                 self._enqueue(session, 'discord_topup', payload, 'discord_topup:' + candidate.id)
@@ -532,6 +544,12 @@ class AppService:
     def claim_outbox(self, limit=20):
         now = utcnow()
         with self.factory.begin() as session:
+            session.execute(update(Outbox).where(
+                Outbox.topic == 'discord_order',
+                Outbox.payload['status'].as_string() == 'pending',
+                Outbox.status != 'done').values(
+                    status='done', lease_token=None,
+                    last_error='Superseded by final order status notification'))
             rows = list(session.scalars(select(Outbox).where(Outbox.status != 'done', Outbox.available_at <= now)
                         .order_by(Outbox.id).limit(limit).with_for_update(skip_locked=True)))
             for row in rows:

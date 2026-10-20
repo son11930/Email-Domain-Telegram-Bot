@@ -49,7 +49,7 @@ Supabase Table Editor เหมาะสำหรับดูและตรว�
 
 ตรวจ outbox และ last error ผู้ใช้ต้องเริ่มแชทและไม่ block bot งานหลัง commit retry ต้องใช้ order เดิม ถ้าส่งถึงบางส่วนแล้วห้ามซื้อใหม่เพื่อส่งส่วนที่ขาด หาก API timeout อาจมีข้อความซ้ำได้ รหัส order ช่วยเทียบรายการเดิม
 
-Discord ตอบ 429 ให้ worker เคารพ retry-after ถ้า webhook ถูกลบให้สร้างใหม่ในห้องเดิม เปลี่ยน env แล้ว restart unit ที่เกี่ยวข้องด้วย `sudo systemctl restart team-mail@worker.service` ไม่ควรคืนเครดิตเพียงเพราะ notification ส่งไม่ได้
+Discord order จะแจ้ง success หลังส่งอีเมลครบ และแจ้งไม่สำเร็จเมื่อมีการคืนเครดิต/ยกเลิกรายการ; ข้อผิดพลาดส่ง Telegram/Discord ชั่วคราวจะ retry จึงยังไม่ถือเป็นผลล้มเหลวถาวร Discord ตอบ 429 ให้ worker เคารพ retry-after ถ้า webhook ถูกลบให้สร้างใหม่ในห้องเดิม เปลี่ยน env แล้ว restart unit ที่เกี่ยวข้องด้วย `sudo systemctl restart team-mail@worker.service` ไม่ควรคืนเครดิตเพียงเพราะ notification ส่งไม่ได้
 
 ## Backup และกู้คืน
 

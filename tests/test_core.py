@@ -27,6 +27,33 @@ def test_purchase_atomic_and_duplicate(service):
         service.purchase(7, 2, 'other')
     assert service.get_user(7)['balance_units'] == 40_000_000
 
+def test_purchase_waits_for_final_discord_notification_and_suppresses_legacy_pending(service):
+    service.ensure_user(7, 'Team Member')
+    service.adjust_credit(1, 7, delta_units=100_000_000, reason='seed', request_key='credit')
+    service.import_emails(1, 'a@example.org')
+    service.purchase(7, 1, 'order')
+    service.enqueue('discord_order', {'order_id': 'old', 'status': 'pending'}, 'legacy-pending')
+
+    jobs = service.claim_outbox()
+
+    assert all(not (job['topic'] == 'discord_order' and job['payload'].get('status') == 'pending')
+               for job in jobs)
+    assert [job['topic'] for job in jobs] == ['telegram_order']
+
+def test_refund_enqueues_final_failure_status_with_user_name(service):
+    service.ensure_user(7, 'Team Member')
+    service.adjust_credit(1, 7, delta_units=100_000_000, reason='seed', request_key='credit')
+    service.import_emails(1, 'a@example.org')
+    order = service.purchase(7, 1, 'order')
+
+    service.refund_order(1, order['id'], 'คืนเครดิตตามคำขอ', 'refund')
+    jobs = service.claim_outbox()
+    notification = next(job for job in jobs if job['topic'] == 'discord_order')
+
+    assert notification['payload']['status'] == 'refunded'
+    assert notification['payload']['user_name'] == 'Team Member'
+    assert notification['payload']['failure_reason'] == 'คืนเครดิตตามคำขอ'
+
 def test_topup_once_and_never_reuse(service):
     service.ensure_user(7)
     topup = service.request_topup(7, 100_000_000)
@@ -143,11 +170,15 @@ def test_outbox_delivery_status_and_owner_checks(service):
     service.enqueue('telegram_document', {'order_id': order['id'], 'user_id': 7}, 'document:' + order['id'])
     service.enqueue('telegram_text', {'order_id': order['id'], 'user_id': 7}, 'text:' + order['id'])
     rows = service.claim_outbox()
-    assert len(rows) == 4
+    assert len(rows) == 3
     assert service.claim_outbox() == []
     for row in rows:
         service.finish_outbox(row['id'], True, lease_token=row['lease_token'])
     assert service.get_order(7, order['id'])['status'] == 'delivered'
+    final_notice, = service.claim_outbox()
+    assert final_notice['topic'] == 'discord_order'
+    assert final_notice['payload']['status'] == 'success'
+    service.finish_outbox(final_notice['id'], True, lease_token=final_notice['lease_token'])
     assert service.summary()['pending_outbox'] == 0
     with pytest.raises(DomainError):
         service.delete_email(1, service.list_emails('sold')[0]['id'], 'sold')

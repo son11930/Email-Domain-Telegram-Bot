@@ -15,6 +15,11 @@ LOG = logging.getLogger(__name__)
 def credits(units: int) -> str:
     return format(Decimal(units) / 100_000_000, 'f')
 
+def discord_user(data: dict) -> str:
+    name = data.get('user_name')
+    name = ' '.join(name.split())[:80] if isinstance(name, str) else ''
+    return f"{name or 'ไม่ระบุชื่อ'} (ID {data.get('user_id', '')})"
+
 
 def split_email_lines(emails: list[str], limit: int = 4000) -> list[str]:
     parts, lines, size = [], [], 0
@@ -52,18 +57,23 @@ class DiscordNotifier:
         if topic not in self.urls:
             raise DeliveryError('Unknown Discord event')
         if topic == 'discord_topup':
-            text = (f"เติมเครดิตสำเร็จ | user {data.get('user_id', '')}\n"
+            text = (f"เติมเครดิตสำเร็จ | {discord_user(data)}\n"
                     f"รายการ: {data.get('topup_id', '')}\n"
                     f"รับ {credits(data.get('amount_units', 0))} USDT\n"
                     f"เพิ่ม {credits(data.get('amount_units', 0))} credit\n"
                     f"ยอดเหลือ {credits(data.get('balance_units', 0))} credit")
         else:
-            text = (f"ซื้อเมล | user {data.get('user_id', '')}\n"
+            statuses = {'success': 'สำเร็จ', 'failed': 'ไม่สำเร็จ',
+                        'refunded': 'ยกเลิก / คืนเครดิต'}
+            status = statuses.get(data.get('status'), 'ไม่ระบุ')
+            text = (f"ซื้อเมล | {discord_user(data)}\n"
                     f"รายการ: {data.get('order_id', '')}\n"
                     f"จำนวน {data.get('quantity', 0)} เมล\n"
                     f"หัก {credits(data.get('total_units', 0))} credit\n"
                     f"ยอดเหลือ {credits(data.get('balance_units', 0))} credit\n"
-                    f"สถานะส่ง: {data.get('status', 'pending')}")
+                    f"สถานะ: {status}")
+            if data.get('failure_reason'):
+                text += f"\nรายละเอียด: {data['failure_reason']}"
         try:
             response = self.client.post(self.urls[topic], params={'wait': 'true'},
                 json={'content': text[:1900], 'allowed_mentions': {'parse': []}})

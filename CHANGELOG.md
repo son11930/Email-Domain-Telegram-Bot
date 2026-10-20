@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] - 2026-10-21
 
 ### Operations
+- Changed Discord order events to omit pending notifications, report success only after all email delivery parts complete, and report failed/refunded orders; top-up and order messages now include the Telegram display name and ID.
 - Updated `bot-manager.bat` to use a configurable known_hosts file, require strict SSH host-key verification on every action, and explain how to select the Windows profile's known_hosts when launched from a separate runtime.
 - Simplified Telegram admin credit adjustments to accept only a Telegram ID and amount, either in one message or as two prompts; positive amounts add credit, negative amounts deduct it, with an automatic audit reason and the existing confirmation/balance guard retained.
 - Fixed the VPS `SUPABASE_URL` base to the project origin after the admin login showed a generic auth failure; verified Supabase Auth health/settings return HTTP 200 and email sign-in is enabled.

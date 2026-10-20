@@ -84,6 +84,11 @@ def test_public_signup_payment_purchase_and_dual_delivery():
         assert 'secret' not in text
         assert {topic for topic, _ in discord.events} == {'discord_topup', 'discord_order'}
         assert len(discord.events) == 2
+        order_notice = next(payload for topic, payload in discord.events if topic == 'discord_order')
+        topup_notice = next(payload for topic, payload in discord.events if topic == 'discord_topup')
+        assert order_notice['status'] == 'success'
+        assert order_notice['user_name'] == 'New user'
+        assert topup_notice['user_name'] == 'New user'
         assert service.get_order(7, orders[0]['id'])['status'] == 'delivered'
         assert service.summary()['pending_outbox'] == 0
         factory.kw['bind'].dispose()
