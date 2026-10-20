@@ -42,7 +42,7 @@ def state(data=None, name=None):
 
 def service():
     return SimpleNamespace(ensure_user=Mock(return_value={'balance_units': 100_000_000}),
-                           get_user=Mock(return_value={'balance_units': 100_000_000}),
+                           get_user=Mock(return_value={'name': 'Team', 'balance_units': 100_000_000}),
                            summary=Mock(return_value={'available': 5}),
                            get_price=Mock(return_value=30_000_000),
                            get_stock=Mock(return_value=5),
@@ -66,6 +66,18 @@ def test_public_start_creates_user_and_private_guard():
     assert msg.answer.await_args.kwargs['reply_markup']
     run(controller.message(message(chat_type='group'), state()))
     assert svc.ensure_user.call_count == 1
+
+
+def test_main_menu_shows_name_with_telegram_id():
+    svc = service()
+    svc.get_user.return_value = {'name': 'Team Member', 'balance_units': 100_000_000}
+    controller = TelegramController(svc, settings())
+    msg = message()
+
+    run(controller.message(msg, state()))
+
+    assert 'ชื่อ: Team Member' in msg.answer.await_args.args[0]
+    assert 'รหัสผู้ใช้: 1' in msg.answer.await_args.args[0]
 
 
 def test_quick_buttons_bind_user_and_nonce():

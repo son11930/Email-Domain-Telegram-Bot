@@ -109,8 +109,11 @@ class TelegramController:
     async def menu(self, message, user_id):
         user = await self.call('get_user', user_id)
         price = await self.call('get_price')
+        name = user.get('name')
+        name = ' '.join(name.split())[:80] if isinstance(name, str) else ''
         await self.say(message,
-                       f'📩 บอทเบิกอีเมลโดเมน\nรหัสผู้ใช้: {user_id}\n'
+                       f'📩 บอทเบิกอีเมลโดเมน\nชื่อ: {name or "ไม่ระบุชื่อ"}\n'
+                       f'รหัสผู้ใช้: {user_id}\n'
                        f'ยอดคงเหลือ: {format_units(user["balance_units"])} credit\n'
                        f'ราคา: {format_units(price)} credit / เมล',
                        main_menu(user_id, price, self.is_admin(user_id)))

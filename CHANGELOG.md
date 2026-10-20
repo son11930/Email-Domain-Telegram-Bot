@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - 2026-10-21
 
+### Telegram
+- Added the Telegram display name beside the user ID in the `/start` and `/menu` home message.
+
 ### Operations
 - Changed Discord order events to omit pending notifications, report success only after all email delivery parts complete, and report failed/refunded orders; top-up and order messages now include the Telegram display name and ID.
 - Updated `bot-manager.bat` to use a configurable known_hosts file, require strict SSH host-key verification on every action, and explain how to select the Windows profile's known_hosts when launched from a separate runtime.
