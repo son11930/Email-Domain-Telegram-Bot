@@ -30,7 +30,7 @@ python -m pip install -r requirements.lock.txt
 python -m pip install -e ".[dev]"
 ```
 
-คัดลอก `.env.example` เป็น `.env` กรอกค่าจริงเฉพาะในเครื่อง แล้วเริ่มทีละโปรเซส:
+สร้างไฟล์ `.env` ในเครื่องหรือ VPS ตามตัวแปรที่ระบุใน [คู่มือติดตั้ง](docs/SETUP.md) เก็บค่าจริงไว้เฉพาะในเครื่อง ห้าม commit ไฟล์นี้ แล้วเริ่มทีละโปรเซส:
 
 ```sh
 team-mail init-db

@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added log and local Codex workspace exclusions, documented the repository description in README, and removed unrelated machine-specific changelog notes before publication.
 - Added a Windows batch manager for checking, starting, stopping, restarting, and viewing logs for the VPS bot, worker, and web services, plus Screen session listing and SSH access.
 - Excluded `.env.example` from Git so credential placeholders and configuration examples are not published with the repository.
+- Updated public setup docs to create `.env` directly and list required settings without relying on the excluded `.env.example`.
 
 ### Implemented
 - Added the public Thai Telegram bot with instant 0.30-credit purchases, bulk confirmation, TXT plus copyable text delivery, history/resend and protected admin import/credit/delete actions.

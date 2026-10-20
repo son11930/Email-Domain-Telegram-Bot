@@ -66,10 +66,12 @@ Free ที่ตรวจวันที่ 2026-10-20 มี DB 500 MB, egress
 
 ```sh
 umask 077
-sudo -u team-mail cp .env.example .env
-sudo -u team-mail chmod 600 .env
+sudo -u team-mail touch .env
+sudo chmod 600 .env
 sudo -u team-mail nano .env
 ```
+
+กรอกค่าตามหัวข้อ 2–5 ได้แก่ `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `WEB_ADMIN_SUBJECTS`, `TELEGRAM_BOT_TOKEN`, `OWNER_ID`, `ADMIN_IDS`, `BINANCE_API_KEY`, `BINANCE_API_SECRET`, `BINANCE_RECEIVER_ID`, `BINANCE_BASE_URL`, `DISCORD_TOPUP_WEBHOOK_URL` และ `DISCORD_ORDER_WEBHOOK_URL` ตั้ง `PRICE_CREDITS=0.30`, `TOPUP_PRECISION=4`, `TOPUP_TTL_SECONDS=480`, `PUBLIC_BASE_URL` และ `ALLOWED_HOSTS` ให้ตรงกับโดเมนจริง ส่วนค่า runtime อื่นใช้ค่าเริ่มต้นจากเอกสาร/โค้ดได้
 
 สร้าง `SESSION_SECRET` ด้วย `openssl rand -hex 32` แล้วเก็บผลใน `.env` ไม่ส่งในแชท `PUBLIC_BASE_URL=https://admin.example.com` ต้องตรงโดเมนเว็บ และ `ALLOWED_HOSTS=admin.example.com` เป็น host ไม่มี scheme/port
 
