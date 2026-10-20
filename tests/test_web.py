@@ -101,6 +101,27 @@ def test_pages_credit_preview_confirm_and_logout():
     assert c.get('/users').url.path == '/login'
 
 
+def test_order_and_topup_tables_format_fixed_point_units():
+    c = client()
+    login(c)
+    c.service.list_orders.return_value = [{
+        'price_units': 30_000_000, 'total_units': 60_000_000,
+        'balance_units': 100_000_000,
+    }]
+    c.service.list_topups.return_value = [{
+        'base_units': 500_000_000, 'expected_units': 500_950_000,
+    }]
+
+    orders = c.get('/orders').text
+    topups = c.get('/topups').text
+
+    assert '0.3 credit' in orders
+    assert '0.6 credit' in orders
+    assert '1 credit' in orders
+    assert '5 USDT' in topups
+    assert '5.0095 USDT' in topups
+
+
 def test_import_upload_preview_and_delete():
     c = client()
     login(c)
