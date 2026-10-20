@@ -2,6 +2,15 @@
 setlocal
 title Team Mail Bot VPS Manager
 set "VPS=root@45.136.254.62"
+if not defined TEAM_MAIL_SSH_KNOWN_HOSTS set "TEAM_MAIL_SSH_KNOWN_HOSTS=%USERPROFILE%\.ssh\known_hosts"
+if not exist "%TEAM_MAIL_SSH_KNOWN_HOSTS%" (
+    echo SSH known_hosts file not found: "%TEAM_MAIL_SSH_KNOWN_HOSTS%"
+    echo Set TEAM_MAIL_SSH_KNOWN_HOSTS to the known_hosts file for your Windows account.
+    echo Example: set TEAM_MAIL_SSH_KNOWN_HOSTS=C:\Users\YourName\.ssh\known_hosts
+    pause
+    exit /b 1
+)
+set "SSH_USER_KNOWN_HOSTS_OPTION=UserKnownHostsFile=%TEAM_MAIL_SSH_KNOWN_HOSTS%"
 
 :menu
 cls
@@ -32,35 +41,35 @@ if errorlevel 1 goto :status
 goto :menu
 
 :status
-ssh %VPS% "systemctl --no-pager --full status team-mail@bot.service team-mail@worker.service team-mail@web.service"
+ssh -o "%SSH_USER_KNOWN_HOSTS_OPTION%" -o StrictHostKeyChecking=yes %VPS% "systemctl --no-pager --full status team-mail@bot.service team-mail@worker.service team-mail@web.service"
 goto :done
 
 :start
-ssh %VPS% "systemctl start team-mail@bot.service team-mail@worker.service team-mail@web.service && systemctl --no-pager --full status team-mail@bot.service team-mail@worker.service team-mail@web.service"
+ssh -o "%SSH_USER_KNOWN_HOSTS_OPTION%" -o StrictHostKeyChecking=yes %VPS% "systemctl start team-mail@bot.service team-mail@worker.service team-mail@web.service && systemctl --no-pager --full status team-mail@bot.service team-mail@worker.service team-mail@web.service"
 goto :done
 
 :stop
-ssh %VPS% "systemctl stop team-mail@web.service team-mail@worker.service team-mail@bot.service && systemctl --no-pager --full status team-mail@bot.service team-mail@worker.service team-mail@web.service"
+ssh -o "%SSH_USER_KNOWN_HOSTS_OPTION%" -o StrictHostKeyChecking=yes %VPS% "systemctl stop team-mail@web.service team-mail@worker.service team-mail@bot.service && systemctl --no-pager --full status team-mail@bot.service team-mail@worker.service team-mail@web.service"
 goto :done
 
 :restart
-ssh %VPS% "systemctl restart team-mail@bot.service team-mail@worker.service team-mail@web.service && systemctl --no-pager --full status team-mail@bot.service team-mail@worker.service team-mail@web.service"
+ssh -o "%SSH_USER_KNOWN_HOSTS_OPTION%" -o StrictHostKeyChecking=yes %VPS% "systemctl restart team-mail@bot.service team-mail@worker.service team-mail@web.service && systemctl --no-pager --full status team-mail@bot.service team-mail@worker.service team-mail@web.service"
 goto :done
 
 :update
-ssh %VPS% "sudo -u team-mail git -C /opt/team-mail-bot pull --ff-only origin main && sudo -u team-mail /opt/team-mail-bot/.venv/bin/python -m pip install -r /opt/team-mail-bot/requirements.lock.txt && sudo -u team-mail /opt/team-mail-bot/.venv/bin/python -m pip install --no-deps -e /opt/team-mail-bot && sudo -u team-mail /opt/team-mail-bot/.venv/bin/team-mail init-db && systemctl restart team-mail@bot.service team-mail@worker.service team-mail@web.service && systemctl --no-pager --full status team-mail@bot.service team-mail@worker.service team-mail@web.service"
+ssh -o "%SSH_USER_KNOWN_HOSTS_OPTION%" -o StrictHostKeyChecking=yes %VPS% "sudo -u team-mail git -C /opt/team-mail-bot pull --ff-only origin main && sudo -u team-mail /opt/team-mail-bot/.venv/bin/python -m pip install -r /opt/team-mail-bot/requirements.lock.txt && sudo -u team-mail /opt/team-mail-bot/.venv/bin/python -m pip install --no-deps -e /opt/team-mail-bot && sudo -u team-mail /opt/team-mail-bot/.venv/bin/team-mail init-db && systemctl restart team-mail@bot.service team-mail@worker.service team-mail@web.service && systemctl --no-pager --full status team-mail@bot.service team-mail@worker.service team-mail@web.service"
 goto :done
 
 :logs
-ssh %VPS% "tail -n 100 -- /opt/team-mail-bot/logs/bot.log /opt/team-mail-bot/logs/worker.log /opt/team-mail-bot/logs/web.log; journalctl -u team-mail@bot.service -u team-mail@worker.service -u team-mail@web.service -n 50 --no-pager"
+ssh -o "%SSH_USER_KNOWN_HOSTS_OPTION%" -o StrictHostKeyChecking=yes %VPS% "tail -n 100 -- /opt/team-mail-bot/logs/bot.log /opt/team-mail-bot/logs/worker.log /opt/team-mail-bot/logs/web.log; journalctl -u team-mail@bot.service -u team-mail@worker.service -u team-mail@web.service -n 50 --no-pager"
 goto :done
 
 :screens
-ssh %VPS% "sudo -u team-mail screen -ls"
+ssh -o "%SSH_USER_KNOWN_HOSTS_OPTION%" -o StrictHostKeyChecking=yes %VPS% "sudo -u team-mail screen -ls"
 goto :done
 
 :shell
-ssh -t %VPS%
+ssh -o "%SSH_USER_KNOWN_HOSTS_OPTION%" -o StrictHostKeyChecking=yes -t %VPS%
 goto :menu
 
 :done

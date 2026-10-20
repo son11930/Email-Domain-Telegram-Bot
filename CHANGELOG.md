@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] - 2026-10-21
 
 ### Operations
+- Updated `bot-manager.bat` to use a configurable known_hosts file, require strict SSH host-key verification on every action, and explain how to select the Windows profile's known_hosts when launched from a separate runtime.
 - Simplified Telegram admin credit adjustments to accept only a Telegram ID and amount, either in one message or as two prompts; positive amounts add credit, negative amounts deduct it, with an automatic audit reason and the existing confirmation/balance guard retained.
 - Fixed the VPS `SUPABASE_URL` base to the project origin after the admin login showed a generic auth failure; verified Supabase Auth health/settings return HTTP 200 and email sign-in is enabled.
 - Published the admin dashboard at the VPS public IP over HTTPS using Nginx on ports 80/443 and a short-lived IP certificate with Certbot auto-renewal and an Nginx reload hook; kept app port 8001 loopback-only and port 8000 unchanged.

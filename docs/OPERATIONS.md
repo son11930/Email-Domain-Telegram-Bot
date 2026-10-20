@@ -12,7 +12,7 @@
 
 อย่าเปิดพอร์ต 8001 สู่ public internet และอย่าใช้ HTTP ตรงกับหน้า login พอร์ต 8000 เป็นของ service อื่นและห้ามเปลี่ยน
 
-อัปเดตจาก Windows ผ่าน `bot-manager.bat` เมนู 5 จะ fast-forward pull `main`, ติดตั้ง dependencies ตาม lockfile, ติดตั้งโปรเจกต์, รัน `init-db` และ restart bot/worker/web; เมนู 2 เริ่ม service ทั้งสาม ส่วน systemd units ที่ enable ไว้จะเริ่มเองหลัง reboot
+อัปเดตจาก Windows ผ่าน `bot-manager.bat` เมนู 5 จะ fast-forward pull `main`, ติดตั้ง dependencies ตาม lockfile, ติดตั้งโปรเจกต์, รัน `init-db` และ restart bot/worker/web; เมนู 2 เริ่ม service ทั้งสาม ส่วน systemd units ที่ enable ไว้จะเริ่มเองหลัง reboot ตัว manager ใช้ `%USERPROFILE%\.ssh\known_hosts` และบังคับ `StrictHostKeyChecking=yes`; ถ้าเรียกจาก runtime ที่มี Windows profile คนละตัว ให้ตั้ง `TEAM_MAIL_SSH_KNOWN_HOSTS` เป็น path ของ known_hosts ที่ตรวจสอบแล้วก่อนเปิด manager
 
 Bot รับคำสั่ง Telegram, worker อ่าน Binance และส่ง outbox, web ให้แอดมินทำรายการ ใช้ PostgreSQL เดียวกัน ความสำเร็จของธุรกรรมอยู่ที่ DB งานส่งอาจตามมาภายหลัง หาก Telegram timeout อาจเกิดข้อความซ้ำ แต่การซื้อ/เครดิตต้องอ้างรายการเดิม
 

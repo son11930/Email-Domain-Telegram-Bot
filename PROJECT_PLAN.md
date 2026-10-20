@@ -100,3 +100,12 @@
 - ข้อกำหนด: คง admin-only, ตรวจผู้ใช้และจำนวน, คง expected-balance guard, request idempotency, ledger/audit โดยใส่เหตุผลมาตรฐานอัตโนมัติ
 - ผล: รองรับทั้ง `ID จำนวน` และการส่ง ID ก่อนแล้วค่อยส่งจำนวน; จำนวนบวกเพิ่ม จำนวนลบหัก; เหตุผล audit สร้างอัตโนมัติ และยังต้องยืนยัน/ตรวจยอดเดิมก่อนบันทึก
 - ขั้นตอน: เพิ่ม regression tests ก่อน → ปรับ handler/state/prompt → รันทดสอบ Telegram และชุดหลัก → อัปเดต CHANGELOG
+
+## งานเพิ่มเติม: ให้ bot-manager ใช้ SSH host key ที่บันทึกไว้
+
+- สถานะ: เสร็จแล้ว (2026-10-21)
+- ปัญหา: เมื่อเรียก manager จาก runtime ที่มี `USERPROFILE` คนละบัญชีกับ Windows profile ของเจ้าของ ระบบ SSH หา `known_hosts` เดิมไม่เจอและแสดง prompt ยืนยัน host ใหม่
+- เป้าหมาย: manager ระบุไฟล์ known_hosts ชัดเจน, ตรวจ host key แบบเข้มงวด และแจ้งแนวทางตั้ง `TEAM_MAIL_SSH_KNOWN_HOSTS` เมื่อรันจาก profile แยก
+- ขอบเขต: ไม่ปิด `StrictHostKeyChecking`, ไม่บันทึก private key/ข้อมูลลับลง repo, คำสั่ง SSH ทุกเมนูใช้ตัวเลือกชุดเดียวกัน
+- วิธีตรวจ: ตรวจทุก invocation ของ ssh ใน batch file ให้ใช้ known_hosts เดียวกันและ `StrictHostKeyChecking=yes`; ตรวจ whitespace ด้วย `git diff --check`
+- ผล: เพิ่ม override `TEAM_MAIL_SSH_KNOWN_HOSTS`, fallback ไปยัง `%USERPROFILE%\.ssh\known_hosts`, ปฏิเสธการเชื่อมต่อเมื่อไม่มีไฟล์ และกำหนด host-key verification ในทุกเมนู SSH
