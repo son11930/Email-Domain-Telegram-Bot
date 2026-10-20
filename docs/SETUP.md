@@ -4,21 +4,29 @@
 
 ## 1. เตรียม VPS
 
-แนะนำ Ubuntu 24.04 LTS และ Python 3.11+ ตรวจรุ่น VPS จริงก่อน: `cat /etc/os-release`, `python3 --version` และ `free -h` หากเป็น Ubuntu 20.04 ให้ตรวจ Python ที่ติดตั้งและแผน security updates; แนะนำอัปเกรดเป็น LTS ที่รองรับก่อน production เพราะ Python เริ่มต้นอาจต่ำกว่าที่โปรแกรมต้องการ เครื่อง 2 core / RAM 4 GB เริ่มด้วย bot, worker และ web อย่างละหนึ่งโปรเซส โดย bot และ web ต้องมี instance เดียว เพราะสถานะสนทนา/session อยู่ในหน่วยความจำ
+แนะนำ Ubuntu 24.04 LTS และ Python 3.11+ ตรวจรุ่น VPS จริงก่อน: `cat /etc/os-release`, `python3 --version` และ `free -h` หากเป็น Ubuntu 20.04 ให้ตรวจ Python ที่ติดตั้งและแผน security updates; แนะนำอัปเกรดเป็น LTS ที่รองรับก่อน production เครื่อง 2 core / RAM 4 GB เริ่มด้วย bot, worker และ web อย่างละหนึ่งโปรเซส โดย bot และ web ต้องมี instance เดียว เพราะสถานะสนทนา/session อยู่ในหน่วยความจำ Ubuntu 22.04 ที่มี Python 3.10 ให้ใช้ `uv` ติดตั้ง CPython 3.11 ตามขั้นตอนด้านล่าง ห้ามสร้าง venv ด้วย Python 3.10
 
 การรันบน VPS ใช้ Python virtualenv และ GNU Screen โดยตรง ไม่ต้องติดตั้ง Docker ให้ใช้บัญชี Linux ที่ไม่ใช่ root สำหรับโปรแกรม และติดตั้งเครื่องมือ:
 
 ```sh
 sudo apt update
-sudo apt install -y screen python3-venv python3-pip unzip nginx certbot python3-certbot-nginx postgresql-client logrotate
+sudo apt install -y screen curl ca-certificates git python3-venv python3-pip postgresql-client logrotate
 ```
 
-สร้างบัญชี Linux แบบไม่มีสิทธิ์ root ชื่อ `team-mail` แล้ววาง source release ที่ `/opt/team-mail-bot`; ให้บัญชีนี้เป็นเจ้าของไฟล์โปรแกรมและ `.env` บริการทั้งสามจะทำงานด้วยบัญชีนี้ ตัวอย่างการสร้างบัญชีและแตก source archive:
+สร้างบัญชี Linux แบบไม่มีสิทธิ์ root ชื่อ `team-mail` แล้ว clone repo ที่ `/opt/team-mail-bot`; ให้บัญชีนี้เป็นเจ้าของไฟล์โปรแกรมและ `.env` บริการทั้งสามจะทำงานด้วยบัญชีนี้ การ clone ทำให้เมนูอัปเดตใน `bot-manager.bat` ใช้ `git pull` ได้:
 
 ```sh
-sudo useradd --system --user-group --create-home --home-dir /opt/team-mail-bot --shell /usr/sbin/nologin team-mail
-sudo unzip team-mail-bot-0.1.0-source.zip -d /opt/team-mail-bot
-sudo chown -R team-mail:team-mail /opt/team-mail-bot
+sudo useradd --system --user-group --create-home --home-dir /var/lib/team-mail --shell /usr/sbin/nologin team-mail
+sudo install -d -o team-mail -g team-mail -m 0750 /opt/team-mail-bot
+sudo -u team-mail git clone --branch main --single-branch https://github.com/son11930/Email-Domain-Telegram-Bot.git /opt/team-mail-bot
+```
+
+ใช้ uv จาก installer ทางการเพื่อให้ได้ Python 3.11 ใน environment ของบัญชีบริการอย่างสม่ำเสมอ (จำเป็นบน Ubuntu 22.04 ที่ Python ระบบเป็น 3.10):
+
+```sh
+curl -LsSf https://astral.sh/uv/install.sh -o /tmp/uv-install.sh
+sudo env UV_UNMANAGED_INSTALL=/usr/local/bin UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
+sudo -u team-mail env HOME=/var/lib/team-mail UV_NO_CONFIG=1 UV_PYTHON_INSTALL_DIR=/var/lib/team-mail/uv-python /usr/local/bin/uv python install 3.11
 ```
 
 ตั้ง DNS `admin.example.com` ไป public IP ของ VPS แทนโดเมนในทุกไฟล์ด้วยโดเมนจริง เปิดเฉพาะ SSH ที่จำเป็นกับ 80/443 เว็บแอดมินใช้ `PORT=8001` และ bind `127.0.0.1` เพื่อไม่ชนกับบริการเดิมบนพอร์ต 8000 และไม่เปิดพอร์ตนี้ออกอินเทอร์เน็ต ไม่เปิด PostgreSQL บน VPS เพราะใช้ DB ภายนอก
@@ -85,9 +93,9 @@ sudo -u team-mail nano .env
 
 ```sh
 cd /opt/team-mail-bot
-sudo -u team-mail python3 -m venv .venv
-sudo -u team-mail .venv/bin/python -m pip install -r requirements.lock.txt
-sudo -u team-mail .venv/bin/python -m pip install --no-deps -e .
+sudo -u team-mail env HOME=/var/lib/team-mail UV_NO_CONFIG=1 UV_PYTHON_INSTALL_DIR=/var/lib/team-mail/uv-python /usr/local/bin/uv venv --python 3.11 .venv
+sudo -u team-mail /usr/local/bin/uv pip install --python /opt/team-mail-bot/.venv/bin/python -r requirements.lock.txt
+sudo -u team-mail /usr/local/bin/uv pip install --python /opt/team-mail-bot/.venv/bin/python --no-deps -e /opt/team-mail-bot
 sudo -u team-mail .venv/bin/team-mail init-db
 ```
 
@@ -114,7 +122,7 @@ systemd จะเริ่มทั้งสาม session หลัง VPS บ�
 
 ## 8. HTTPS สำหรับเว็บ admin
 
-ออก certificate ก่อนเปิดไฟล์ TLS ตัวอย่าง ใช้ nginx site ชั่วคราวที่มี `listen 80`, `server_name` ตรง DNS และ proxy ไป `127.0.0.1:8001` แล้วตรวจ `sudo nginx -t` จากนั้น reload nginx และรัน:
+เมื่อมีโดเมนแล้วจึงติดตั้ง `nginx certbot python3-certbot-nginx` และออก certificate ก่อนเปิดไฟล์ TLS ตัวอย่าง ใช้ nginx site ชั่วคราวที่มี `listen 80`, `server_name` ตรง DNS และ proxy ไป `127.0.0.1:8001` แล้วตรวจ `sudo nginx -t` จากนั้น reload nginx และรัน:
 
 ```sh
 sudo certbot --nginx -d admin.example.com

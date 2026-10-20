@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replaced Telegram summary reads with focused price and stock queries and moved user/email search filtering into SQL.
 - Added the versioned PostgreSQL column-width migration and VPS manager to the explicitly allowed source release archive.
 - Added a Windows manager action that fast-forward pulls `main`, installs locked dependencies, runs idempotent DB initialization, and restarts all three VPS services over SSH.
+- Installed VPS prerequisites, cloned the repository, provisioned Python 3.11 and dependencies, and registered boot units; services remain disabled until the owner supplies `.env` credentials.
+- Updated VPS setup instructions to use Git checkout and a Python 3.11 runtime so the Windows `git pull` updater works with the deployment.
 
 ### Changed
 - Switched the documented VPS run path from Docker Compose to three GNU Screen sessions for the bot, worker, and web; added systemd start/status/log/stop/restart guidance for boot startup and process recovery.
