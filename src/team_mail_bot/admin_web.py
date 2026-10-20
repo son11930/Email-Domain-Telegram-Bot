@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from threading import Lock
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -64,6 +65,7 @@ def create_app(service, settings, auth_client=None):
     app.state.settings = settings
     app.state.sessions = {}
     app.state.limits = {}
+    limits_lock = Lock()
     auth = auth_client or SupabaseAuth(settings)
     templates = Jinja2Templates(directory=str(Path(__file__).parent / 'templates'))
     templates.env.filters['credits'] = lambda n: format(Decimal(n or 0) / UNITS, 'f')
@@ -89,15 +91,16 @@ def create_app(service, settings, auth_client=None):
         return current
 
     def limited(key, maximum=30, window=60):
-        now = time.time()
-        # The store is bounded even under clients with many spoofed identifiers.
-        records = {k: v for k, v in app.state.limits.items() if now - v[0] < window}
-        if len(records) >= 5000 and key not in records:
-            raise HTTPException(429, 'กรุณาลองใหม่ภายหลัง')
-        start, count = records.get(key, (now, 0))
-        app.state.limits = {**records, key: (start, count + 1)}
-        if count >= maximum:
-            raise HTTPException(429, 'ทำรายการถี่เกินไป กรุณารอสักครู่')
+        with limits_lock:
+            now = time.time()
+            # Each bucket retains its own expiry across endpoints with different windows.
+            records = {k: v for k, v in app.state.limits.items() if v[0] > now}
+            if len(records) >= 5000 and key not in records:
+                raise HTTPException(429, 'กรุณาลองใหม่ภายหลัง')
+            expires, count = records.get(key, (now + window, 0))
+            app.state.limits = {**records, key: (expires, count + 1)}
+            if count >= maximum:
+                raise HTTPException(429, 'ทำรายการถี่เกินไป กรุณารอสักครู่')
 
     def view(request, title, **data):
         current = session(request, required=False)
@@ -366,7 +369,8 @@ def create_app(service, settings, auth_client=None):
             raise HTTPException(400, 'ข้อมูลหรือเหตุผลไม่ถูกต้อง')
         payload = {'action': action, 'reason': reason, 'key': secrets.token_urlsafe(24)}
         for field in ('price', 'order_id', 'transaction_id', 'user_id'):
-            payload[field] = str(values.get(field, ''))[:120]
+            limit = 256 if field == 'transaction_id' else 120
+            payload[field] = str(values.get(field, ''))[:limit]
         return view(request, 'ยืนยันรายการสำคัญ', management=payload)
 
     @app.post('/manage/confirm')
@@ -387,7 +391,7 @@ def create_app(service, settings, auth_client=None):
             elif action == 'refund':
                 await asyncio.to_thread(service.refund_order, actor, str(values.get('order_id', ''))[:120], reason, 'web:' + key)
             elif action == 'review':
-                await asyncio.to_thread(service.review_payment, actor, str(values.get('transaction_id', ''))[:120],
+                await asyncio.to_thread(service.review_payment, actor, str(values.get('transaction_id', ''))[:256],
                     int(values.get('user_id', 0)), reason, 'web:' + key)
             else:
                 raise ValueError()

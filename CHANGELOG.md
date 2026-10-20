@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - 2026-10-21
 
+### Fixed
+- Kept Binance transaction IDs up to the API's 256-character limit intact through manual review, wallet ledger references and notification deduplication; added a one-time PostgreSQL migration for existing databases.
+- Preserved each login rate-limit bucket's own expiry so unrelated requests cannot clear a longer login window.
+- Made database initialization atomic across table creation, RLS enablement and public grant revocation.
+
+### Performance
+- Batched email inventory imports, allowed concurrent purchases to share the price read lock, and removed duplicate order completion work and quadratic payment-history accumulation.
+- Replaced Telegram summary reads with focused price and stock queries and moved user/email search filtering into SQL.
+- Added the versioned PostgreSQL column-width migration and VPS manager to the explicitly allowed source release archive.
+
 ### Changed
 - Switched the documented VPS run path from Docker Compose to three GNU Screen sessions for the bot, worker, and web; added systemd start/status/log/stop/restart guidance for boot startup and process recovery.
 - Updated setup, operations, README, project plan, and validation notes to match the Screen-based VPS workflow.

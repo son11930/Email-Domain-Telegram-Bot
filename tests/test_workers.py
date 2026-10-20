@@ -82,3 +82,15 @@ def test_file_delivery_contains_only_email_lines():
     bot = SimpleNamespace(send_document=AsyncMock())
     asyncio.run(OutboxWorker(service, bot, SimpleNamespace()).run_once())
     assert bot.send_document.call_args.kwargs['document'].data == b'a@example.org\n'
+
+
+def test_delivery_finishes_without_a_second_order_completion_query():
+    from unittest.mock import Mock
+
+    service = FakeService([{'id': 8, 'topic': 'telegram_text', 'payload': {
+        'user_id': 42, 'order_id': 'o', 'text': 'a@example.org'}, 'attempts': 1}])
+    service.mark_order_delivered = Mock(side_effect=AssertionError('finish_outbox owns order completion'))
+    bot = SimpleNamespace(send_message=AsyncMock())
+    asyncio.run(OutboxWorker(service, bot, SimpleNamespace()).run_once())
+    assert service.finished[0][1] is True
+    service.mark_order_delivered.assert_not_called()

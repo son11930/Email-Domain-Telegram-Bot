@@ -4,10 +4,17 @@
 
 ## งานเพิ่มเติม: เผยแพร่ source ไป GitHub
 
-- สถานะ: ตรวจและแก้ `.gitignore`, README description และเตรียมไฟล์เผยแพร่แล้ว; พบ credentials จริง/คล้ายจริงใน `.env.example` และ source archive เก่า จึงยังไม่ push จนกว่าจะยืนยันการหมุนเวียน/revoke credentials
+- สถานะ: เผยแพร่ source ไป `main` แล้ว; `.env.example` ถูก ignore และไม่อยู่ใน Git; README/คู่มือติดตั้งไม่อ้างไฟล์ที่ไม่เผยแพร่
 - เป้าหมาย: `son11930/Email-Domain-Telegram-Bot`
 - Git identity ใช้เฉพาะ repo นี้; ไม่เก็บอีเมลส่วนตัวในไฟล์โครงการ
-- ก่อน push: ไม่รวม `.env`/`.env.example`, credentials, attachments, `.venv`, logs, DB หรือ build artifacts; ตรวจ remote/branch และ staged files อีกครั้งก่อนเผยแพร่
+- เผยแพร่ 42 ไฟล์ใน initial commit และ push การแก้เอกสารติดตั้งตามหลัง; ตรวจยืนยันว่า `main` ตรงกับ `origin/main`
+
+## งานปัจจุบัน: ตรวจ code, database, security และ performance
+
+- สถานะ: ตรวจและแก้ findings ที่ยืนยันแล้ว; tests 145 ผ่าน/6 PostgreSQL integration ข้ามเมื่อไม่มี TEST_DATABASE_URL, Ruff ผ่าน; ยังไม่ได้ deploy
+- ขอบเขต: หา bug/ช่องโหว่/จุดคอขวดในโค้ดและ schema; แก้เฉพาะ findings ที่ทำซ้ำหรือยืนยันจากโค้ดได้
+- ขั้นตอน: code review, database review, security review และ performance review → เพิ่ม regression tests ก่อนการแก้ → แก้ findings → รันชุดทดสอบที่เกี่ยวข้องและชุดหลัก → อัปเดต CHANGELOG
+- ข้อจำกัด: ไม่ใช้ credentials จริง, ไม่แตะข้อมูล production, ไม่ deploy VPS และไม่เปลี่ยนพฤติกรรมระบบที่ไม่มีหลักฐานรองรับ
 
 ## งานเพิ่มเติม: เปลี่ยนวิธีรัน VPS เป็น screen
 
@@ -47,7 +54,7 @@
 - [x] เว็บแอดมิน Supabase Auth, CSRF, ปรับเครดิต ตั้งราคา คืนเครดิต และตรวจเงินค้าง
 - [x] Discord สองห้อง, outbox พร้อม lease token/retry และปิดบัง secrets ใน log
 - [x] 141 tests ผ่าน รวม PostgreSQL จริง 6 tests; coverage 92.24%; Ruff/pip check ผ่าน
-- [x] Security/code review และแก้ findings ที่ยืนยัน พร้อมคู่มือและไฟล์ deploy
+- [x] Security/code review และแก้ findings ที่ยืนยัน พร้อมคู่มือและไฟล์ deploy (รอบตรวจเพิ่ม: 145 tests ผ่าน, 6 PostgreSQL integration ข้ามเมื่อไม่มี TEST_DATABASE_URL)
 - [ ] เจ้าของสร้าง/ตั้งค่า Supabase, Telegram token, Binance read-only key/receiver, Discord webhooks และโดเมน
 - [ ] ตรวจ Binance รับเงินจริง/precision/ประวัติในบัญชีจริง พร้อมทดสอบเล็กที่เจ้าของอนุญาต
 - [ ] Deploy บน VPS, HTTPS, backup restore และ smoke test บริการจริง

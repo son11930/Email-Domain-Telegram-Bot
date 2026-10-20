@@ -179,3 +179,18 @@ def test_naive_or_reversed_intervals_rejected():
         client.history(NOW.replace(tzinfo=None), NOW)
     with pytest.raises(ValueError):
         client.history(NOW, NOW - timedelta(seconds=1))
+
+
+def test_large_paged_history_deduplicates_and_preserves_chronological_order():
+    records = [record(transactionId=f'tx{index:04}', transactionTime=MS + index) for index in range(350)]
+
+    def handler(request):
+        query = parse_qs(request.url.query.decode())
+        lower, upper = int(query['startTime'][0]), int(query['endTime'][0])
+        rows = list(reversed([row for row in records if lower <= row['transactionTime'] <= upper]))
+        if len(rows) >= 99:
+            return ok(rows[:100])
+        return ok(rows + rows[:1])
+
+    result = api(handler).history(NOW, NOW + timedelta(milliseconds=349))
+    assert [row['transaction_id'] for row in result] == [f'tx{index:04}' for index in range(350)]

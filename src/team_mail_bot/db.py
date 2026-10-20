@@ -24,9 +24,9 @@ def create_session_factory(database_url):
 
 def init_db(factory):
     engine = factory.kw['bind']
-    Base.metadata.create_all(engine)
-    if engine.dialect.name == 'postgresql':
-        with engine.begin() as connection:
+    with engine.begin() as connection:
+        Base.metadata.create_all(connection)
+        if engine.dialect.name == 'postgresql':
             roles = set(connection.scalars(text("SELECT rolname FROM pg_roles WHERE rolname IN ('anon', 'authenticated')")))
             for table in Base.metadata.sorted_tables:
                 name = engine.dialect.identifier_preparer.quote(table.name)

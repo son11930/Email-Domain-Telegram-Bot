@@ -91,7 +91,7 @@ sudo -u team-mail .venv/bin/python -m pip install --no-deps -e .
 sudo -u team-mail .venv/bin/team-mail init-db
 ```
 
-`init-db` สร้างตารางเริ่มต้นด้วย CREATE TABLE และตั้งสิทธิ์ ไม่ได้อัปเกรดคอลัมน์/constraint ของตารางที่มีอยู่แล้ว รุ่นที่เปลี่ยน schema ต้องมี migration ที่กำหนดเวอร์ชันและขั้นตอนเฉพาะ อ่าน release notes และสำรองก่อน ห้ามรัน init-db แล้วถือว่า DB เก่าถูกอัปเกรดครบ
+`init-db` สร้างตารางเริ่มต้นด้วย CREATE TABLE และตั้งสิทธิ์ ไม่ได้อัปเกรดคอลัมน์/constraint ของตารางที่มีอยู่แล้ว รุ่นที่เปลี่ยน schema ต้องมี migration ที่กำหนดเวอร์ชันและขั้นตอนเฉพาะ อ่าน release notes และสำรองก่อน ห้ามรัน init-db แล้วถือว่า DB เก่าถูกอัปเกรดครบ สำหรับฐานที่มีอยู่ ให้สำรองก่อนแล้วรัน `migrations/20261021_widen_binance_transaction_ids.sql` หนึ่งครั้งก่อนเริ่มรุ่นนี้
 
 `init-db` เปิด RLS และเพิกถอน public grants ของตารางแอป ตรวจ Supabase Dashboard ว่านโยบายยังปิดกั้น `anon` / `authenticated` อ่านหรือเขียนคลัง/ยอด/ledger โดยตรง อย่าเพิ่ม public policy เพื่อแก้ปัญหาการเชื่อมต่อ Backend ใช้ DB credential ของ server เท่านั้น
 

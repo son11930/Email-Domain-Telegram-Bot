@@ -148,6 +148,4 @@ class OutboxWorker:
             else:
                 await asyncio.to_thread(self.service.finish_outbox, job['id'], True,
                                         lease_token=job.get('lease_token'))
-                if job['topic'] in {'telegram_text', 'telegram_document'}:
-                    await asyncio.to_thread(self.service.mark_order_delivered, job['payload']['order_id'])
         return len(jobs)

@@ -106,7 +106,8 @@ class BinancePayClient:
                     key = normalized["transaction_id"]
                     if key in found and found[key] != normalized:
                         raise PaymentError("Binance Pay returned conflicting transaction records")
-                    found = {**found, key: normalized}
+                    # This accumulator is local; copying all prior rows per insert is quadratic.
+                    found[key] = normalized
         return sorted(found.values(), key=lambda row: (row["occurred_at"], row["transaction_id"]))
 
     def _normalize(self, row, lower, upper):

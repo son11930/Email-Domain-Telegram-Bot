@@ -54,7 +54,7 @@ class Ledger(Base):
     after_units: Mapped[int] = mapped_column(BigInteger)
     actor_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
     reason: Mapped[str] = mapped_column(String(500))
-    reference: Mapped[str] = mapped_column(String(200), unique=True)
+    reference: Mapped[str] = mapped_column(String(300), unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 class Topup(Base):
@@ -74,7 +74,7 @@ class AmountLease(Base):
 
 class Payment(Base):
     __tablename__ = 'payment_events'
-    transaction_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    transaction_id: Mapped[str] = mapped_column(String(256), primary_key=True)
     amount_units: Mapped[int] = mapped_column(BigInteger)
     currency: Mapped[str] = mapped_column(String(20))
     receiver_id: Mapped[str] = mapped_column(String(160), default='')
@@ -88,7 +88,7 @@ class Outbox(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     topic: Mapped[str] = mapped_column(String(60))
     payload: Mapped[dict] = mapped_column(JSON)
-    dedupe_key: Mapped[str] = mapped_column(String(200), unique=True)
+    dedupe_key: Mapped[str] = mapped_column(String(300), unique=True)
     status: Mapped[str] = mapped_column(String(20), default='pending', index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

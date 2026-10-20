@@ -4,7 +4,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -115,8 +115,12 @@ class AppService:
 
     def list_users(self, query=''):
         with self.factory() as session:
-            rows = session.scalars(select(User).order_by(User.id))
-            return [dto(row) for row in rows if str(query).lower() in (str(row.id) + ' ' + row.name).lower()]
+            statement = select(User).order_by(User.id)
+            if query:
+                search = str(query)
+                statement = statement.where(or_(cast(User.id, String).icontains(search, autoescape=True),
+                                                User.name.icontains(search, autoescape=True)))
+            return [dto(row) for row in session.scalars(statement)]
 
     def summary(self):
         with self.factory() as session:
@@ -129,15 +133,19 @@ class AppService:
                     'total_topup_units': session.scalar(select(func.coalesce(func.sum(Payment.amount_units), 0)).where(Payment.status == 'paid')),
                     'price_units': self._price(session)}
 
-    def _price(self, session, lock=False):
+    def _price(self, session, lock=False, *, shared_lock=False):
         insert_once(session, Setting, {'name': 'price_units', 'value': self.price_units}, 'name')
         query = select(Setting).where(Setting.name == 'price_units')
-        row = session.scalar(query.with_for_update() if lock else query)
+        row = session.scalar(query.with_for_update(read=shared_lock) if lock or shared_lock else query)
         return row.value
 
     def get_price(self):
         with self.factory.begin() as session:
             return self._price(session)
+
+    def get_stock(self):
+        with self.factory() as session:
+            return session.scalar(select(func.count()).select_from(Email).where(Email.status == 'available'))
 
     def set_price(self, actor_id, price_units, reason):
         actor_id = actor_text(actor_id)
@@ -186,8 +194,12 @@ class AppService:
         preview = self.preview_import(text)
         added = 0
         with self.factory.begin() as session:
-            for email in preview['valid']:
-                added += int(insert_once(session, Email, {'email': email, 'status': 'available'}, 'email'))
+            dialect_insert = pg_insert if session.bind.dialect.name == 'postgresql' else sqlite_insert
+            for start in range(0, len(preview['valid']), 400):
+                values = [{'email': email, 'status': 'available'} for email in preview['valid'][start:start + 400]]
+                statement = dialect_insert(Email).values(values).on_conflict_do_nothing(
+                    index_elements=[Email.email]).returning(Email.id)
+                added += len(session.scalars(statement).all())
             result = {'added': added, 'duplicate': preview['duplicates'] + len(preview['valid']) - added, 'invalid': preview['invalid']}
             session.add(Audit(actor_id=actor_id, action='import_emails', details=result))
         return result
@@ -201,7 +213,9 @@ class AppService:
             statement = select(Email).order_by(Email.id.desc())
             if status != 'all':
                 statement = statement.where(Email.status == status)
-            return [dto(row) for row in session.scalars(statement) if str(query).lower() in row.email.lower()]
+            if query:
+                statement = statement.where(Email.email.icontains(str(query), autoescape=True))
+            return [dto(row) for row in session.scalars(statement)]
 
     def delete_email(self, actor_id, email_id, reason):
         actor_id = actor_text(actor_id)
@@ -283,7 +297,7 @@ class AppService:
             previous = session.scalar(select(Order).where(Order.request_key == key))
             if previous:
                 return self._order(session, previous)
-            price = self._price(session, True)
+            price = self._price(session, shared_lock=True)
             if expected_price_units is not None and expected_price_units != price:
                 raise DomainError('Price changed; please confirm the new price')
             total = quantity * price
@@ -460,7 +474,7 @@ class AppService:
             self._mark_order_delivered(session, order_id)
 
     def record_payment(self, transaction_id, amount_units, currency, occurred_at, receiver_id='', order_type='C2C'):
-        if not isinstance(transaction_id, str) or not transaction_id or len(transaction_id) > 160:
+        if not isinstance(transaction_id, str) or not transaction_id or len(transaction_id) > 256:
             raise DomainError('Invalid payment transaction ID')
         money(amount_units)
         if not isinstance(occurred_at, datetime) or occurred_at.tzinfo is None:
@@ -510,7 +524,7 @@ class AppService:
                     'status': 'pending', 'attempts': 0, 'available_at': utcnow(), 'last_error': ''}, 'dedupe_key')
 
     def enqueue(self, topic, payload, dedupe_key):
-        if not isinstance(topic, str) or len(topic) > 60 or not isinstance(dedupe_key, str) or len(dedupe_key) > 200:
+        if not isinstance(topic, str) or len(topic) > 60 or not isinstance(dedupe_key, str) or len(dedupe_key) > 300:
             raise DomainError('Invalid notification metadata')
         with self.factory.begin() as session:
             self._enqueue(session, topic, payload, dedupe_key)

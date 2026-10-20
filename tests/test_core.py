@@ -96,6 +96,41 @@ def test_delayed_discovery_and_late_payment(service):
     assert len(service.list_topups()) == 2
 
 
+def test_maximum_binance_transaction_id_survives_manual_review(service):
+    from datetime import datetime
+
+    transaction_id = 'x' * 256
+    service.ensure_user(7)
+    assert service.record_payment(transaction_id, 1, 'USDT', datetime.now(UTC))['status'] == 'needs_review'
+    result = service.review_payment(1, transaction_id, 7, 'verified from Binance', 'review-long-id')
+    assert result['status'] == 'paid'
+    assert service.get_user(7)['balance_units'] == 1
+    with pytest.raises(DomainError, match='transaction ID'):
+        service.record_payment('y' * 257, 1, 'USDT', datetime.now(UTC))
+
+
+def test_user_and_email_search_are_applied_in_database(service):
+    from sqlalchemy import event
+
+    service.ensure_user(7, 'Team Member')
+    service.import_emails(1, '\n'.join(f'user{index}@example.org' for index in range(50)))
+    statements = []
+    engine = service.factory.kw['bind']
+
+    def capture(connection, cursor, statement, parameters, context, executemany):
+        if statement.lower().startswith('select'):
+            statements.append(statement.lower())
+
+    event.listen(engine, 'before_cursor_execute', capture)
+    try:
+        assert [row['id'] for row in service.list_users('tEAM')] == [7]
+        assert [row['email'] for row in service.list_emails(query='USER49@')] == ['user49@example.org']
+    finally:
+        event.remove(engine, 'before_cursor_execute', capture)
+    assert all(' limit ' not in statement for statement in statements)
+    assert any(' like ' in statement or ' ilike ' in statement for statement in statements)
+
+
 def test_outbox_delivery_status_and_owner_checks(service):
     service.ensure_user(7)
     service.adjust_credit(1, 7, delta_units=100_000_000, reason='seed', request_key='seed')
@@ -302,3 +337,72 @@ def test_bulk_delete_atomic_and_deduplicated(service):
 def test_bulk_delete_rejects_invalid_identifiers(service, ids):
     with pytest.raises(DomainError):
         service.delete_emails(1, ids, 'invalid')
+
+
+def test_import_batches_database_inserts_and_counts_concurrent_duplicates(service, monkeypatch):
+    from sqlalchemy import event
+
+    service.import_emails(1, 'duplicate@example.org')
+    emails = ['duplicate@example.org'] + [f'batch{index}@example.org' for index in range(1200)]
+    monkeypatch.setattr(service, 'preview_import', lambda text: {'valid': emails, 'duplicates': 0, 'invalid': 0})
+    inserts = []
+    engine = service.factory.kw['bind']
+
+    def capture(connection, cursor, statement, parameters, context, executemany):
+        if statement.lower().startswith('insert into email_inventory'):
+            inserts.append(statement)
+
+    event.listen(engine, 'before_cursor_execute', capture)
+    try:
+        result = service.import_emails(1, 'already previewed')
+    finally:
+        event.remove(engine, 'before_cursor_execute', capture)
+    assert result == {'added': 1200, 'duplicate': 1, 'invalid': 0}
+    assert len(inserts) <= 4, 'Import should use bounded batches rather than one remote query per email'
+
+
+def test_purchase_uses_shared_price_lock_but_price_changes_remain_exclusive(service):
+    from sqlalchemy import event
+    from sqlalchemy.dialects import postgresql
+
+    service.ensure_user(7)
+    service.adjust_credit(1, 7, delta_units=100_000_000, reason='seed', request_key='shared-price-seed')
+    service.import_emails(1, 'shared-price@example.org')
+    statements = []
+
+    def capture(state):
+        if getattr(state.statement, 'is_select', False):
+            sql = str(state.statement.compile(dialect=postgresql.dialect()))
+            if 'FROM settings' in sql:
+                statements.append(sql)
+
+    event.listen(service.factory, 'do_orm_execute', capture)
+    try:
+        service.purchase(7, 1, 'shared-price')
+        assert any('FOR SHARE' in sql for sql in statements)
+        statements.clear()
+        service.set_price(1, 20_000_000, 'new price')
+        assert any('FOR UPDATE' in sql for sql in statements)
+    finally:
+        event.remove(service.factory, 'do_orm_execute', capture)
+
+
+def test_stock_read_counts_only_available_inventory_in_one_query(service):
+    from sqlalchemy import event
+
+    service.import_emails(1, 'available@example.org\ndeleted@example.org')
+    deleted = service.list_emails(query='deleted')[0]
+    service.delete_email(1, deleted['id'], 'exclude deleted')
+    statements = []
+    engine = service.factory.kw['bind']
+
+    def capture(connection, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine, 'before_cursor_execute', capture)
+    try:
+        assert service.get_stock() == 1
+    finally:
+        event.remove(engine, 'before_cursor_execute', capture)
+    assert len(statements) == 1
+    assert 'count(' in statements[0].lower()

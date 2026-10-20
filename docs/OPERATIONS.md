@@ -62,7 +62,7 @@ pg_restore --no-owner --no-acl --exit-on-error --dbname=postgres team-mail.backu
 
 ## อัปเดตและย้อนกลับ
 
-สำรอง DB และบันทึก release ปัจจุบัน หยุดสาม unit ด้วย `sudo systemctl stop team-mail@bot.service team-mail@worker.service team-mail@web.service` นำ source รุ่นใหม่ลง working directory เดิมและติดตั้ง dependency ตาม release ด้วยบัญชี `team-mail` จากนั้นรัน `.venv/bin/team-mail init-db` เฉพาะเมื่อ release ระบุ แล้วเริ่มอีกครั้งด้วย `sudo systemctl start team-mail@bot.service team-mail@worker.service team-mail@web.service` ตรวจสถานะ, Screen sessions, log และธุรกรรมทดสอบ `init-db` สร้างตารางเริ่มต้น ไม่แก้ schema ของตารางเดิมโดยอัตโนมัติ รุ่นที่เปลี่ยน schema ต้องมี migration พร้อมเวอร์ชันและขั้นตอนเฉพาะก่อนอัปเกรด
+สำรอง DB และบันทึก release ปัจจุบัน หยุดสาม unit ด้วย `sudo systemctl stop team-mail@bot.service team-mail@worker.service team-mail@web.service` นำ source รุ่นใหม่ลง working directory เดิมและติดตั้ง dependency ตาม release ด้วยบัญชี `team-mail` หากมี migration ระบุใน release ให้ใช้ SQL Editor ของ Supabase หรือ `psql` ต่อฐานที่ถูกต้องและทำ migration ก่อนรัน `.venv/bin/team-mail init-db` (ถ้า release ระบุ) แล้วเริ่มอีกครั้งด้วย `sudo systemctl start team-mail@bot.service team-mail@worker.service team-mail@web.service` ตรวจสถานะ, Screen sessions, log และธุรกรรมทดสอบ `init-db` สร้างตารางเริ่มต้น ไม่แก้ schema ของตารางเดิมโดยอัตโนมัติ สำหรับรุ่นนี้ให้รัน `migrations/20261021_widen_binance_transaction_ids.sql` เพียงครั้งเดียวก่อนเริ่มโค้ดใหม่
 
 ถ้า schema เปลี่ยนอย่าย้อนโค้ดเก่าโดยไม่ตรวจความเข้ากัน การ restore backup production จะทำให้ธุรกรรมหลัง backup หาย ต้องหยุดรับเงิน/ซื้อและกระทบยอด Binance ก่อน ห้ามถือว่าการ restore ทำให้การโอนเงินจริงย้อนกลับ
 

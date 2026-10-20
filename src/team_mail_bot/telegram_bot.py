@@ -108,8 +108,7 @@ class TelegramController:
 
     async def menu(self, message, user_id):
         user = await self.call('get_user', user_id)
-        summary = await self.call('summary')
-        price = summary.get('price_units', self.settings.price_units)
+        price = await self.call('get_price')
         await self.say(message,
                        f'📩 บอทเบิกอีเมลโดเมน\nรหัสผู้ใช้: {user_id}\n'
                        f'ยอดคงเหลือ: {format_units(user["balance_units"])} credit\n'
@@ -192,8 +191,7 @@ class TelegramController:
             if action == 'balance':
                 return await self.menu(message, user_id)
             if action == 'stock':
-                summary = await self.call('summary')
-                available = summary.get('available_emails', 0)
+                available = await self.call('get_stock')
                 return await self.say(message, f'📦 เมลพร้อมเบิก {available} เมล')
             if action == 'history':
                 return await self.history(message, user_id)
@@ -213,8 +211,7 @@ class TelegramController:
         quantity = int(text)
         if not 1 <= quantity <= self.settings.max_order_quantity:
             raise ValueError('quantity')
-        summary = await self.call('summary')
-        price = summary.get('price_units', self.settings.price_units)
+        price = await self.call('get_price')
         user = await self.call('get_user', user_id)
         total = quantity * price
         if total > user['balance_units']:

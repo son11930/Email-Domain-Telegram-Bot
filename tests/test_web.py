@@ -233,6 +233,24 @@ def test_login_page_reuses_session_and_rate_limits_requests():
     assert c.get('/login').status_code == 429
 
 
+def test_short_window_activity_does_not_reset_login_attempt_limit(monkeypatch):
+    clock = Mock(return_value=1000.0)
+    monkeypatch.setattr('team_mail_bot.admin_web.time', SimpleNamespace(time=clock))
+    c = client()
+    token = csrf(c.get('/login'))
+    data = {'csrf': token, 'email': 'admin@example.org', 'password': 'bad'}
+    for _ in range(5):
+        assert c.post('/login', data=data).status_code == 401
+    assert c.post('/login', data=data).status_code == 429
+
+    clock.return_value = 1061.0
+    assert c.get('/login').status_code == 200
+    assert c.post('/login', data=data).status_code == 429
+
+    clock.return_value = 1300.0
+    assert c.post('/login', data=data).status_code == 401
+
+
 def test_full_session_store_evicts_only_oldest_anonymous():
     import time
 

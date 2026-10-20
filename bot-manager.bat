@@ -46,11 +46,11 @@ ssh %VPS% "systemctl restart team-mail@bot.service team-mail@worker.service team
 goto :done
 
 :logs
-ssh %VPS% "journalctl -u team-mail@bot.service -u team-mail@worker.service -u team-mail@web.service -n 100 --no-pager"
+ssh %VPS% "tail -n 100 -- /opt/team-mail-bot/logs/bot.log /opt/team-mail-bot/logs/worker.log /opt/team-mail-bot/logs/web.log; journalctl -u team-mail@bot.service -u team-mail@worker.service -u team-mail@web.service -n 50 --no-pager"
 goto :done
 
 :screens
-ssh -t %VPS% "screen -ls"
+ssh %VPS% "sudo -u team-mail screen -ls"
 goto :done
 
 :shell

@@ -44,6 +44,8 @@ def service():
     return SimpleNamespace(ensure_user=Mock(return_value={'balance_units': 100_000_000}),
                            get_user=Mock(return_value={'balance_units': 100_000_000}),
                            summary=Mock(return_value={'available': 5}),
+                           get_price=Mock(return_value=30_000_000),
+                           get_stock=Mock(return_value=5),
                            purchase=Mock(return_value={'id': 'order1'}))
 
 
@@ -185,7 +187,7 @@ def test_topup_preset_custom_and_cancel_show_exact_amount():
 
 def test_stock_history_and_resend_only_owner_requested():
     svc = service()
-    svc.summary.return_value = {'available_emails': 7}
+    svc.get_stock.return_value = 7
     svc.history = Mock(return_value={'orders': [{'id': 'mine', 'quantity': 2}],
                                      'ledger': [{'delta_units': -60_000_000}]})
     svc.get_order = Mock(return_value={'id': 'mine'})
@@ -310,3 +312,19 @@ def test_dispatcher_injects_fsm_and_routes_start_without_network(monkeypatch):
     svc.ensure_user.assert_called_once_with(1, 'New member')
     assert requests.await_count == 1
     run(bot.session.close())
+
+
+def test_menu_stock_and_bulk_use_focused_reads_instead_of_global_summary():
+    svc = service()
+    svc.get_price = Mock(return_value=30_000_000)
+    svc.get_stock = Mock(return_value=7)
+    svc.summary.side_effect = AssertionError('Global statistics are not needed by public hot paths')
+    controller = TelegramController(svc, settings())
+    run(controller.menu(message(), 1))
+    run(controller.bulk_preview(message(), MemoryState('bulk'), '2', 1))
+    stock = callback('stock')
+    run(controller.callback(stock, MemoryState()))
+    assert '7' in stock.message.answer.await_args.args[0]
+    assert svc.get_price.call_count == 2
+    svc.get_stock.assert_called_once_with()
+    svc.summary.assert_not_called()
