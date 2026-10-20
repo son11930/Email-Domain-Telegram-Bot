@@ -4,6 +4,16 @@
 
 ดูสถานะด้วย `sudo systemctl status team-mail@bot.service team-mail@worker.service team-mail@web.service` และ `sudo -u team-mail screen -ls` ดู log เช่น `sudo tail -n 100 /opt/team-mail-bot/logs/worker.log` โดย logrotate เก็บรายวัน 7 ชุด ลบ key/token/email ส่วนตัวก่อนแชร์ log ให้ผู้อื่น ห้ามแสดง `.env` หรือ connection URL systemd เปิดบริการหลัง reboot และ restart session ที่จบเอง; ตรวจเหตุขัดข้องด้วย `sudo journalctl -u team-mail@worker.service -n 100 --no-pager`
 
+## เข้าเว็บแอดมินจาก public IP
+
+เปิด `https://45.136.254.62/login` เว็บแอปยัง bind เฉพาะ `127.0.0.1:8001`; Nginx รับการเชื่อมต่อภายนอกบนพอร์ต 80/443 และส่งต่อ HTTPS ไปยังเว็บ พอร์ต 80 เปลี่ยนเส้นทางไป HTTPS อัตโนมัติ ล็อกอินด้วยบัญชี Supabase Auth ที่ UUID อยู่ใน `WEB_ADMIN_SUBJECTS`
+
+ใบรับรองเป็น Let's Encrypt short-lived IP certificate และมีอายุประมาณ 6 วัน Certbot Snap timer ต่ออายุอัตโนมัติวันละสองครั้ง และ deploy hook reload Nginx เมื่อได้ใบรับรองใหม่ อย่าปิด `snap.certbot.renew.timer` หรือบล็อก outbound ACME/HTTP challenge traffic ตรวจ timer ด้วย `systemctl status snap.certbot.renew.timer` และดูวันหมดอายุด้วย `sudo certbot certificates` หาก renewal ล้มเหลว ให้ตรวจ `journalctl -u snap.certbot.renew.service` และทดสอบ `sudo certbot renew --cert-name team-mail-admin-ip --dry-run`
+
+อย่าเปิดพอร์ต 8001 สู่ public internet และอย่าใช้ HTTP ตรงกับหน้า login พอร์ต 8000 เป็นของ service อื่นและห้ามเปลี่ยน
+
+อัปเดตจาก Windows ผ่าน `bot-manager.bat` เมนู 5 จะ fast-forward pull `main`, ติดตั้ง dependencies ตาม lockfile, ติดตั้งโปรเจกต์, รัน `init-db` และ restart bot/worker/web; เมนู 2 เริ่ม service ทั้งสาม ส่วน systemd units ที่ enable ไว้จะเริ่มเองหลัง reboot
+
 Bot รับคำสั่ง Telegram, worker อ่าน Binance และส่ง outbox, web ให้แอดมินทำรายการ ใช้ PostgreSQL เดียวกัน ความสำเร็จของธุรกรรมอยู่ที่ DB งานส่งอาจตามมาภายหลัง หาก Telegram timeout อาจเกิดข้อความซ้ำ แต่การซื้อ/เครดิตต้องอ้างรายการเดิม
 
 รันแต่ละบริการอย่างละหนึ่ง instance โดย bot และ web ใช้สถานะสนทนา/session ในหน่วยความจำ จึงห้าม scale เพิ่มโดยยังไม่เปลี่ยนระบบเก็บสถานะ หลัง restart ให้ผู้ใช้เริ่มขั้นตอนที่ค้างใหม่หรือให้แอดมินล็อกอินใหม่ Worker มี claim token และกู้คืนงานได้ รุ่นปัจจุบันประมวลผลงานที่ claim ทีละงาน อย่าเพิ่ม worker เพื่อเร่งส่งโดยไม่ประเมิน rate limit และการทำงานพร้อมกัน

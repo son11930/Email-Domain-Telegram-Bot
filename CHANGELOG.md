@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - 2026-10-21
 
+### Operations
+- Fixed the VPS `SUPABASE_URL` base to the project origin after the admin login showed a generic auth failure; verified Supabase Auth health/settings return HTTP 200 and email sign-in is enabled.
+- Published the admin dashboard at the VPS public IP over HTTPS using Nginx on ports 80/443 and a short-lived IP certificate with Certbot auto-renewal and an Nginx reload hook; kept app port 8001 loopback-only and port 8000 unchanged.
+- Verified external HTTP redirects to HTTPS and HTTPS GET returns 200 with a trusted certificate; confirmed the Certbot renewal timer and all bot services are active.
+- Completed VPS setup after the owner populated `.env`; initialized Supabase schema and enabled the bot, worker, and web Screen services at boot.
+- Set the VPS web URL/allowed-host values to loopback-only operation and verified the login page; documented SSH tunnel access for deployments without a domain.
+- Ran the same VPS command sequence as `bot-manager.bat` menu 5: fast-forward pull, locked dependency install, app install, DB initialization, unit enablement, and restart of all services.
+- Protected the VPS `.env` with owner-only permissions; preserved the existing trading service on port 8000 while the admin web listens on loopback port 8001.
+- Ran the full local suite: 145 passed and six PostgreSQL integration tests skipped because `TEST_DATABASE_URL` was not configured. No real payment or Discord test message was sent.
+
 ### Fixed
 - Kept Binance transaction IDs up to the API's 256-character limit intact through manual review, wallet ledger references and notification deduplication; added a one-time PostgreSQL migration for existing databases.
 - Preserved each login rate-limit bucket's own expiry so unrelated requests cannot clear a longer login window.
