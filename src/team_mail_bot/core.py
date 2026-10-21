@@ -70,7 +70,7 @@ def actor_text(value):
 class AppService:
     def __init__(self, session_factory, *, price_units=30_000_000, precision=4,
                  topup_ttl_seconds=480, max_order_quantity=1000, topup_daily_limit=3,
-                 topup_cooldown_seconds=60, outbox_lease_seconds=300):
+                 topup_cooldown_seconds=60, outbox_lease_seconds=300, admin_ids=()):
         money(price_units, True)
         if precision not in (3, 4) or not 30 <= topup_ttl_seconds <= 3600:
             raise ValueError('Invalid topup configuration')
@@ -90,6 +90,7 @@ class AppService:
         self.topup_daily_limit = topup_daily_limit
         self.topup_cooldown_seconds = topup_cooldown_seconds
         self.outbox_lease_seconds = outbox_lease_seconds
+        self.admin_ids = frozenset(admin_ids)
 
     def _user(self, session, user_id, lock=False):
         positive_id(user_id)
@@ -126,7 +127,7 @@ class AppService:
         with self.factory() as session:
             count = lambda model, *clauses: session.scalar(select(func.count()).select_from(model).where(*clauses))
             return {'users': count(User), 'available_emails': count(Email, Email.status == 'available'),
-                    'orders': count(Order), 'pending_topups': count(Topup, Topup.status == 'pending'),
+                    'orders': count(Order), 'successful_topups': count(Payment, Payment.status == 'paid'),
                     'needs_review': count(Payment, Payment.status == 'needs_review'),
                     'pending_outbox': count(Outbox, Outbox.status != 'done'),
                     'total_sales_units': session.scalar(select(func.coalesce(func.sum(Order.total_units), 0))),
@@ -340,12 +341,13 @@ class AppService:
                 return {'order_id': order_id, 'status': 'refunded', 'balance_units': previous.after_units}
             self._ledger(session, user, order.total_units, reference, reason, actor_id)
             order.status = 'refunded'
-            self._enqueue(session, 'discord_order', {
-                'order_id': order.id, 'user_id': user.id, 'user_name': user.name,
-                'quantity': order.quantity, 'total_units': order.total_units,
-                'balance_units': user.balance_units, 'status': 'refunded',
-                'failure_reason': reason},
-                'discord_order:refunded:' + order_id)
+            if user.id not in self.admin_ids:
+                self._enqueue(session, 'discord_order', {
+                    'order_id': order.id, 'user_id': user.id, 'user_name': user.name,
+                    'quantity': order.quantity, 'total_units': order.total_units,
+                    'balance_units': user.balance_units, 'status': 'refunded',
+                    'failure_reason': reason},
+                    'discord_order:refunded:' + order_id)
             deliveries = session.scalars(select(Outbox).where(
                 Outbox.topic.in_(['telegram_order', 'telegram_text', 'telegram_document']),
                 Outbox.payload['order_id'].as_string() == order_id).with_for_update())
@@ -459,6 +461,13 @@ class AppService:
         with self.factory() as session:
             return [dto(row) for row in session.scalars(select(Topup).order_by(Topup.created_at.desc()))]
 
+    def expire_topups(self, now=None):
+        now = aware(now or utcnow())
+        with self.factory.begin() as session:
+            result = session.execute(update(Topup).where(
+                Topup.status == 'pending', Topup.expires_at <= now).values(status='expired'))
+            return result.rowcount
+
     def list_payments(self):
         with self.factory() as session:
             return [dto(row) for row in session.scalars(select(Payment).order_by(Payment.occurred_at.desc()))]
@@ -474,11 +483,12 @@ class AppService:
         if parts and all(row.status == 'done' for row in rows):
             order.status = 'delivered'
             user = session.get(User, order.user_id)
-            self._enqueue(session, 'discord_order', {
-                'order_id': order.id, 'user_id': user.id, 'user_name': user.name,
-                'quantity': order.quantity, 'total_units': order.total_units,
-                'balance_units': order.balance_units, 'status': 'success'},
-                'discord_order:' + order.id)
+            if user.id not in self.admin_ids:
+                self._enqueue(session, 'discord_order', {
+                    'order_id': order.id, 'user_id': user.id, 'user_name': user.name,
+                    'quantity': order.quantity, 'total_units': order.total_units,
+                    'balance_units': order.balance_units, 'status': 'success'},
+                    'discord_order:' + order.id)
 
     def mark_order_delivered(self, order_id):
         with self.factory.begin() as session:

@@ -54,6 +54,59 @@ def test_refund_enqueues_final_failure_status_with_user_name(service):
     assert notification['payload']['user_name'] == 'Team Member'
     assert notification['payload']['failure_reason'] == 'คืนเครดิตตามคำขอ'
 
+
+def test_admin_orders_complete_without_discord_order_notifications(service):
+    admin_service = AppService(service.factory, admin_ids={7, 8})
+    admin_service.ensure_user(7, 'Owner')
+    admin_service.adjust_credit(1, 7, delta_units=100_000_000, reason='seed', request_key='admin-seed')
+    admin_service.import_emails(1, 'owner@example.org')
+    order = admin_service.purchase(7, 1, 'admin-order')
+    admin_service.enqueue('telegram_text', {'order_id': order['id'], 'user_id': 7,
+        'text': 'owner@example.org'}, 'admin-order-text')
+
+    for job in admin_service.claim_outbox():
+        admin_service.finish_outbox(job['id'], True, lease_token=job['lease_token'])
+
+    assert admin_service.get_order(7, order['id'])['status'] == 'delivered'
+    assert admin_service.claim_outbox() == []
+
+    admin_service.ensure_user(8, 'Admin')
+    admin_service.adjust_credit(1, 8, delta_units=100_000_000, reason='seed', request_key='admin-seed-8')
+    admin_service.import_emails(1, 'admin@example.org')
+    order = admin_service.purchase(8, 1, 'admin-order-8')
+    admin_service.refund_order(1, order['id'], 'test refund', 'admin-refund-8')
+    assert admin_service.claim_outbox() == []
+
+
+def test_expired_topups_are_marked_without_new_user_request(service, monkeypatch):
+    from datetime import timedelta
+
+    from team_mail_bot import core
+    now = core.utcnow()
+    monkeypatch.setattr(core, 'utcnow', lambda: now)
+    service.ensure_user(7)
+    topup = service.request_topup(7, 100_000_000)
+    now += timedelta(seconds=481)
+
+    assert service.expire_topups() == 1
+    assert service.list_topups()[0]['status'] == 'expired'
+    result = service.record_payment('too-late', topup['expected_units'], 'USDT', now)
+    assert result['status'] == 'needs_review'
+    assert service.get_user(7)['balance_units'] == 0
+
+
+def test_dashboard_counts_only_successful_topup_payments(service):
+    from datetime import datetime, timedelta
+
+    service.ensure_user(7)
+    topup = service.request_topup(7, 100_000_000)
+    created = datetime.fromisoformat(topup['created_at'])
+    assert service.summary()['successful_topups'] == 0
+
+    service.record_payment('success-topup', topup['expected_units'], 'USDT', created + timedelta(seconds=1))
+
+    assert service.summary()['successful_topups'] == 1
+
 def test_topup_once_and_never_reuse(service):
     service.ensure_user(7)
     topup = service.request_topup(7, 100_000_000)

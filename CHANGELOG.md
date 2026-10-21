@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - 2026-10-21
 
+### Admin web and notifications
+- Suppressed Discord purchase and refund notifications for owner/admin Telegram IDs while retaining normal order delivery and status updates.
+- Displayed admin timestamps in Thailand time, translated audit actions/details and record statuses, and formatted credit amounts for readability.
+- Expired top-up requests automatically in the payment worker and admin top-up page; retained payment matching for transfers timestamped within the original request window.
+- Replaced the dashboard's pending top-up card with a count of successfully credited payments.
+
 ### Telegram
 - Added the Telegram display name beside the user ID in the `/start` and `/menu` home message.
 

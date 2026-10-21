@@ -5,9 +5,11 @@ import asyncio
 import secrets
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from threading import Lock
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -18,6 +20,67 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .core import DomainError
 
 UNITS = 100_000_000
+THAI_TIME = ZoneInfo('Asia/Bangkok')
+
+
+def thai_datetime(value):
+    if not value:
+        return '—'
+    try:
+        parsed = datetime.fromisoformat(str(value))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(THAI_TIME).strftime('%d/%m/%Y %H:%M:%S') + ' น. (เวลาไทย)'
+    except (TypeError, ValueError, OverflowError):
+        return str(value)
+
+
+def audit_action(value):
+    return {
+        'import_emails': 'เพิ่มอีเมล', 'delete_email': 'ลบอีเมล',
+        'delete_emails': 'ลบอีเมลหลายรายการ', 'adjust_credit': 'ปรับเครดิต',
+        'set_price': 'เปลี่ยนราคา', 'refund_order': 'คืนเครดิตคำสั่งซื้อ',
+        'review_payment': 'ตรวจสอบและยืนยันเงินเข้า',
+    }.get(value, str(value))
+
+
+def audit_details(value):
+    if not isinstance(value, dict):
+        return str(value)
+    pieces = []
+    if 'user_id' in value:
+        pieces.append('Telegram ID ' + str(value['user_id']))
+    if 'delta_units' in value:
+        delta = Decimal(value['delta_units']) / UNITS
+        pieces.append('ปรับเครดิต ' + ('+' if delta > 0 else '') + format(delta, 'f') + ' credit')
+    elif 'price_units' in value:
+        pieces.append('ราคาใหม่ ' + format(Decimal(value['price_units']) / UNITS, 'f') + ' credit/เมล')
+    elif 'added' in value:
+        pieces.append('เพิ่ม ' + str(value['added']) + ' เมล · ซ้ำ ' + str(value.get('duplicate', 0))
+                      + ' · ไม่ผ่าน ' + str(value.get('invalid', 0)))
+    if 'before_units' in value:
+        pieces.append('ราคาเดิม ' + format(Decimal(value['before_units']) / UNITS, 'f') + ' credit/เมล')
+    if 'email_id' in value:
+        pieces.append('รหัสอีเมล ' + str(value['email_id']))
+    if 'email_ids' in value:
+        pieces.append('รหัสอีเมล ' + ', '.join(str(item) for item in value['email_ids']))
+    if 'deleted' in value:
+        pieces.append('ลบสำเร็จ ' + str(value['deleted']) + ' รายการ')
+    for key, label in (('order_id', 'คำสั่งซื้อ'), ('transaction_id', 'ธุรกรรม')):
+        if key in value:
+            pieces.append(label + ' ' + str(value[key]))
+    if value.get('reason'):
+        pieces.append('เหตุผล: ' + str(value['reason']))
+    return ' · '.join(pieces) if pieces else ' · '.join(str(k) + ': ' + str(v) for k, v in value.items())
+
+
+def web_status(value):
+    return {
+        'pending': 'รอโอน', 'expired': 'หมดเวลา', 'cancelled': 'ยกเลิก',
+        'paid': 'สำเร็จ', 'needs_review': 'รอตรวจสอบ', 'delivered': 'ส่งแล้ว',
+        'refunded': 'คืนเครดิตแล้ว', 'failed': 'ไม่สำเร็จ', 'available': 'พร้อมขาย',
+        'allocated': 'ขายแล้ว', 'deleted': 'ลบแล้ว', 'processing': 'กำลังดำเนินการ',
+    }.get(value, str(value))
 
 
 class SupabaseAuth:
@@ -69,6 +132,10 @@ def create_app(service, settings, auth_client=None):
     auth = auth_client or SupabaseAuth(settings)
     templates = Jinja2Templates(directory=str(Path(__file__).parent / 'templates'))
     templates.env.filters['credits'] = lambda n: format(Decimal(n or 0) / UNITS, 'f')
+    templates.env.filters['thai_datetime'] = thai_datetime
+    templates.env.filters['audit_action'] = audit_action
+    templates.env.filters['audit_details'] = audit_details
+    templates.env.filters['web_status'] = web_status
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(getattr(settings, 'allowed_hosts', ('localhost', '127.0.0.1'))))
 
     def session(request, required=True):
@@ -341,6 +408,7 @@ def create_app(service, settings, auth_client=None):
     @app.get('/topups')
     def topups(request: Request):
         session(request)
+        service.expire_topups()
         return view(request, 'รายการเติมเงิน', records=service.list_topups())
 
     @app.get('/audit')
@@ -352,7 +420,10 @@ def create_app(service, settings, auth_client=None):
     def history(request: Request, user_id: int):
         session(request)
         records = service.history(user_id)
-        return view(request, 'ประวัติผู้ใช้ ' + str(user_id), history=records)
+        groups = [('คำสั่งซื้อ', records.get('orders', [])),
+                  ('ประวัติเครดิต', records.get('ledger', [])),
+                  ('ประวัติเติมเงิน', records.get('topups', []))]
+        return view(request, 'ประวัติผู้ใช้ ' + str(user_id), history_groups=groups)
 
     @app.get('/settings')
     def settings_page(request: Request):

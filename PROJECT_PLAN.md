@@ -136,3 +136,18 @@
 - ข้อกำหนด: คงเก็บข้อมูลจำนวนเต็ม 1e-8 ในฐานข้อมูลและใช้ในการคำนวณทั้งหมด; `price_units`/`total_units` เป็น credit ส่วน `base_units`/`expected_units` เป็น USDT
 - ขั้นตอน: เพิ่ม regression tests ในหน้า orders/topups → format เฉพาะตอนแสดงผล → รัน web/full suite และ lint → อัปเดต CHANGELOG
 - ผล: ตารางเว็บแอดมินแปลงค่าหน่วยย่อยให้เป็นทศนิยมและติดป้าย credit/USDT; ไม่แก้ข้อมูลที่จัดเก็บหรือการคำนวณ
+
+## งานเพิ่มเติม: ปรับ Discord, เวลาและสถานะเติมเงินบนหน้าเว็บแอดมิน
+
+- สถานะ: เสร็จแล้ว (2026-10-22)
+- เป้าหมาย:
+  1. ไม่ส่ง Discord order notification เมื่อผู้ซื้อเป็น owner/admin แต่ flow ส่งเมลใน Telegram ยังทำงานเหมือนเดิม
+  2. แสดงวันที่เป็นเวลาไทย (Asia/Bangkok) เฉพาะบนหน้าเว็บ
+  3. แปล action และรายละเอียด audit เป็นภาษาไทยที่อ่านง่าย พร้อมแสดงจำนวนเครดิตเป็นทศนิยม
+  4. เปลี่ยน top-up ที่พ้นเวลารอเป็น `expired` อัตโนมัติ แม้ไม่มีการสร้างคำขอเติมเงินใหม่ และไม่ให้เครดิตหาก Binance บันทึกเวลารับเงินนอกช่วงคำขอ
+  5. เปลี่ยนการ์ด dashboard จากคำขอเติมเงิน pending เป็นจำนวน payment ที่เติมเครดิตสำเร็จ
+- ข้อกำหนด: เก็บ timestamp UTC และจำนวนเงินหน่วยย่อยเดิมในฐานข้อมูล; audit output ต้อง escape; คำขอหมดอายุที่มี payment timestamp อยู่ในช่วงคำขอเดิมยังตรวจ/จับคู่ได้ แม้ poller พบช้า; คง amount lease ไว้เพื่อป้องกันการจับคู่ยอดเก่าผิดคน
+- ขั้นตอน: เพิ่ม regression tests สำหรับ core/worker/dashboard/template → เพิ่ม admin IDs ให้ service → ต่ออายุสถานะใน payment poll → ปรับการแสดงผลในเว็บ → รัน tests, lint และ review → อัปเดต CHANGELOG
+- ผล: Discord ข้ามผู้ซื้อที่เป็น owner/admin, หน้ารายการในเว็บแสดงเวลาไทยและสถานะภาษาไทย, audit แสดงข้อความอ่านง่ายพร้อมจำนวนเครดิตแทน raw dict และหน้า top-up หมดอายุคำขออัตโนมัติ; dashboard แสดงจำนวน payment ที่เติมสำเร็จ
+- การตรวจสอบ: `pytest --cov=team_mail_bot` ผ่าน 160 tests, ข้าม 6 PostgreSQL tests เพราะไม่มี `TEST_DATABASE_URL`, coverage รวม 91%; Ruff และ `git diff --check` ผ่าน
+- หมายเหตุการ review: เรียก code-reviewer agent แล้ว แต่ agent runtime ปฏิเสธโมเดลที่ไม่รองรับ จึงตรวจ diff และรัน regression/full suite ในเครื่องแทน

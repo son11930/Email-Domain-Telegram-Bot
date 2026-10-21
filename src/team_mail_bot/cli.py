@@ -21,7 +21,7 @@ def build_service(settings):
     return AppService(create_session_factory(settings.database_url),
         price_units=settings.price_units, precision=settings.topup_precision,
         topup_ttl_seconds=settings.topup_ttl_seconds,
-        max_order_quantity=settings.max_order_quantity)
+        max_order_quantity=settings.max_order_quantity, admin_ids=settings.admin_ids)
 
 
 async def run_bot(settings, service):
@@ -53,6 +53,7 @@ async def run_worker(settings, service):
         while True:
             started = time.monotonic()
             try:
+                await asyncio.to_thread(service.expire_topups)
                 count = await asyncio.to_thread(poller.poll_once)
                 LOG.info('Payment reconciliation completed: %d events', count)
             except Exception as exc:  # noqa: BLE001 - isolate failures and redact provider details.

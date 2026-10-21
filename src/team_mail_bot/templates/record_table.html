@@ -1,0 +1,15 @@
+{% set labels={'id':'รหัสรายการ','actor_id':'ผู้ดำเนินการ','user_id':'Telegram ID','action':'การดำเนินการ','details':'รายละเอียด','status':'สถานะ','created_at':'สร้างเมื่อ (เวลาไทย)','expires_at':'หมดอายุเมื่อ (เวลาไทย)','occurred_at':'เวลาที่รับเงิน (เวลาไทย)','transaction_id':'รหัสธุรกรรม','request_key':'รหัสคำขอ','quantity':'จำนวนเมล'} %}
+{% set unit_labels={'price_units':'ราคาต่อเมล (credit)','total_units':'ยอดรวม (credit)','balance_units':'ยอดคงเหลือ (credit)','base_units':'ยอดที่ระบุ (USDT)','expected_units':'ยอดโอนที่ต้องตรง (USDT)','amount_units':'ยอดเงิน (USDT)','before_units':'ยอดก่อน (credit)','after_units':'ยอดหลัง (credit)','delta_units':'เปลี่ยนแปลง (credit)'} %}
+<div class="table"><table>
+{% for row in records %}
+  {% if loop.first %}<tr>{% for key in row %}<th>{{ unit_labels.get(key, labels.get(key,key)) }}</th>{% endfor %}</tr>{% endif %}
+  <tr>{% for key,value in row.items() %}<td>
+    {% if key.endswith('_units') %}{{ value|credits }} {{ 'USDT' if key in ('base_units','expected_units','amount_units') else 'credit' }}
+    {% elif key in ('created_at','expires_at','occurred_at') %}{{ value|thai_datetime }}
+    {% elif key == 'action' %}{{ value|audit_action }}
+    {% elif key == 'details' %}{{ value|audit_details }}
+    {% elif key == 'status' %}{{ value|web_status }}
+    {% else %}{{ value }}{% endif %}
+  </td>{% endfor %}</tr>
+{% else %}<tr><td>ไม่มีรายการ</td></tr>{% endfor %}
+</table></div>

@@ -38,6 +38,7 @@ def client():
     service.import_emails = Mock(return_value={'added': 1, 'duplicate': 0, 'invalid': 0})
     for method in ('list_orders', 'list_topups', 'list_audit', 'list_payments'):
         setattr(service, method, Mock(return_value=[{'id': 'example', 'status': 'pending'}]))
+    service.expire_topups = Mock(return_value=0)
     service.history = Mock(return_value={'ledger': []})
     service.get_price = Mock(return_value=30000000)
     for method in ('adjust_credit', 'delete_email', 'set_price', 'refund_order', 'review_payment'):
@@ -120,6 +121,85 @@ def test_order_and_topup_tables_format_fixed_point_units():
     assert '1 credit' in orders
     assert '5 USDT' in topups
     assert '5.0095 USDT' in topups
+
+
+def test_audit_table_localizes_details_and_thai_timestamp_safely():
+    c = client()
+    login(c)
+    c.service.list_audit.return_value = [{
+        'id': 1, 'actor_id': '639', 'action': 'adjust_credit',
+        'details': {'user_id': 6047343762, 'delta_units': 30000000,
+                    'reason': '<script>alert(1)</script>'},
+        'created_at': '2026-10-21T20:30:00+00:00',
+    }]
+
+    page = c.get('/audit').text
+
+    assert 'ปรับเครดิต' in page
+    assert '22/10/2026 03:30:00' in page
+    assert '0.3 credit' in page
+    assert '30000000' not in page
+    assert '<script>alert(1)</script>' not in page
+    assert '&lt;script&gt;alert(1)&lt;/script&gt;' in page
+
+    c.service.list_audit.return_value = [{
+        'id': 2, 'actor_id': '639', 'action': 'delete_emails',
+        'details': {'email_ids': [11, 12], 'deleted': 2, 'reason': 'ล้างข้อมูลซ้ำ'},
+        'created_at': '2026-10-21T20:30:00+00:00',
+    }]
+    deleted_page = c.get('/audit').text
+    assert 'ลบอีเมลหลายรายการ' in deleted_page
+    assert 'ลบสำเร็จ 2 รายการ' in deleted_page
+    assert 'รหัสอีเมล 11, 12' in deleted_page
+
+
+def test_dashboard_shows_successful_topup_count_instead_of_pending():
+    c = client()
+    login(c)
+    c.service.summary.return_value = {'successful_topups': 8}
+
+    page = c.get('/').text
+
+    assert 'เติมเงินสำเร็จ (ครั้ง)' in page
+    assert '>8<' in page
+    assert 'รายการรอเติมเงิน' not in page
+
+
+def test_topup_status_and_timestamps_are_readable_in_thai():
+    c = client()
+    login(c)
+    c.service.list_topups.return_value = [{
+        'id': 'request-1', 'user_id': 7, 'base_units': 500000000,
+        'expected_units': 500950000, 'status': 'expired',
+        'created_at': '2026-10-21T20:30:00+00:00',
+        'expires_at': '2026-10-21T20:38:00+00:00',
+    }]
+
+    page = c.get('/topups').text
+
+    assert 'หมดเวลา' in page
+    assert '22/10/2026 03:30:00' in page
+    assert '22/10/2026 03:38:00' in page
+
+
+def test_settings_and_user_history_show_thai_times():
+    c = client()
+    login(c)
+    c.service.list_payments.return_value = [{
+        'transaction_id': 'tx-1', 'amount_units': 100000000,
+        'status': 'paid', 'occurred_at': '2026-10-21T20:30:00Z',
+    }]
+    c.service.history.return_value = {'orders': [], 'ledger': [{
+        'id': 1, 'created_at': '2026-10-21T20:30:00+00:00', 'delta_units': 30000000,
+    }], 'topups': []}
+
+    payments = c.get('/settings').text
+    history = c.get('/users/1/history').text
+
+    assert '22/10/2026 03:30:00 น. (เวลาไทย)' in payments
+    assert '22/10/2026 03:30:00 น. (เวลาไทย)' in history
+    assert '<pre>' not in payments
+    assert '<pre>' not in history
 
 
 def test_import_upload_preview_and_delete():
