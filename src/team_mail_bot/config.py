@@ -37,6 +37,7 @@ class Settings:
     binance_api_secret: str = field(default="", repr=False)
     binance_receiver_id: str = ""
     binance_base_url: str = "https://api.binance.com"
+    bank_name: str = ""
     bank_account_name: str = field(default="", repr=False)
     bank_account_number: str = field(default="", repr=False)
     slipok_api_key: str = field(default="", repr=False)
@@ -96,6 +97,7 @@ class Settings:
             binance_api_secret=env.get("BINANCE_API_SECRET", ""),
             binance_receiver_id=env.get("BINANCE_RECEIVER_ID", ""),
             binance_base_url=binance_url,
+            bank_name=env.get("BANK_NAME", "").strip(),
             bank_account_name=env.get("BANK_ACCOUNT_NAME", ""),
             bank_account_number=env.get("BANK_ACCOUNT_NUMBER", ""),
             slipok_api_key=env.get("SLIPOK_API_KEY", ""),

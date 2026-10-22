@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - 2026-10-21
 
+### Telegram bank top-ups
+- Added optional `BANK_NAME` configuration and display it in bank transfer instructions so users can identify the recipient bank before transferring.
+
 ### Bank transfer top-ups
 - Added a bounded SlipOK client and private-chat bank transfer flow that displays configured recipient details, randomized satang amount, and expected credit.
 - Added a separate PostgreSQL bank top-up/payment ledger path; it checks the exact amount, transaction timestamp, and unique SlipOK transaction reference before atomically crediting the wallet.

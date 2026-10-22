@@ -64,7 +64,7 @@ Free ที่ตรวจวันที่ 2026-10-20 มี DB 500 MB, egress
 
 ## 5.1 เติมผ่านบัญชีธนาคารด้วย SlipOK (ทางเลือก)
 
-กรอก `BANK_ACCOUNT_NAME` และ `BANK_ACCOUNT_NUMBER` ให้ตรงกับบัญชีรับเงินจริงใน `.env` เพื่อให้บอทแสดงข้อมูลก่อนโอน จากนั้นสมัคร/ตั้งค่า SlipOK และกรอก `SLIPOK_API_KEY` กับ `SLIPOK_BRANCH_ID` ให้ branch ผูกกับบัญชีเดียวกัน ระบบเรียกตรวจสลิปด้วย `log=true`; ห้ามส่ง API key ใน Telegram, Discord, source control หรือ browser
+กรอก `BANK_NAME`, `BANK_ACCOUNT_NAME` และ `BANK_ACCOUNT_NUMBER` ให้ตรงกับบัญชีรับเงินจริงใน `.env` เพื่อให้บอทแสดงชื่อธนาคารและข้อมูลบัญชีก่อนโอน จากนั้นสมัคร/ตั้งค่า SlipOK และกรอก `SLIPOK_API_KEY` กับ `SLIPOK_BRANCH_ID` ให้ branch ผูกกับบัญชีเดียวกัน ระบบเรียกตรวจสลิปด้วย `log=true`; ห้ามส่ง API key ใน Telegram, Discord, source control หรือ browser
 
 ผู้ใช้ระบุยอดตั้งแต่ 150 บาท ระบบสุ่มสตางค์เพิ่ม 0.01–0.99 บาท แสดงยอดโอนที่ต้องตรงและเครดิตที่จะได้ แล้วให้โอนภายใน 15 นาทีและส่งภาพสลิปในแชทส่วนตัวเท่านั้น ระบบให้เครดิตเมื่อ SlipOK ยืนยันผู้รับและสลิป พร้อมยอดและเวลาอยู่ในช่วงคำขอ และ transaction reference ยังไม่เคยถูกใช้ หาก SlipOK ใช้ไม่ได้หรือผลตรวจไม่ชัด ระบบไม่เติมเครดิตอัตโนมัติ ให้ติดต่อเจ้าของเป็นการส่วนตัว คง Binance Pay แยกเป็นอีกช่องทางและใช้กติกาเดิม
 
@@ -85,7 +85,7 @@ sudo chmod 600 .env
 sudo -u team-mail nano .env
 ```
 
-กรอกค่าตามหัวข้อ 2–5 ได้แก่ `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `WEB_ADMIN_SUBJECTS`, `TELEGRAM_BOT_TOKEN`, `OWNER_ID`, `ADMIN_IDS`, `BINANCE_API_KEY`, `BINANCE_API_SECRET`, `BINANCE_RECEIVER_ID`, `BINANCE_BASE_URL`, `DISCORD_TOPUP_WEBHOOK_URL` และ `DISCORD_ORDER_WEBHOOK_URL` ตั้ง `PRICE_CREDITS=0.30`, `TOPUP_PRECISION=4`, `TOPUP_TTL_SECONDS=480`, `PUBLIC_BASE_URL` และ `ALLOWED_HOSTS` ให้ตรงกับโดเมนจริง หากเปิดเติมธนาคารให้ใส่ `BANK_ACCOUNT_NAME`, `BANK_ACCOUNT_NUMBER`, `SLIPOK_API_KEY` และ `SLIPOK_BRANCH_ID` เพิ่มด้วย ส่วนค่า runtime อื่นใช้ค่าเริ่มต้นจากเอกสาร/โค้ดได้
+กรอกค่าตามหัวข้อ 2–5 ได้แก่ `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `WEB_ADMIN_SUBJECTS`, `TELEGRAM_BOT_TOKEN`, `OWNER_ID`, `ADMIN_IDS`, `BINANCE_API_KEY`, `BINANCE_API_SECRET`, `BINANCE_RECEIVER_ID`, `BINANCE_BASE_URL`, `DISCORD_TOPUP_WEBHOOK_URL` และ `DISCORD_ORDER_WEBHOOK_URL` ตั้ง `PRICE_CREDITS=0.30`, `TOPUP_PRECISION=4`, `TOPUP_TTL_SECONDS=480`, `PUBLIC_BASE_URL` และ `ALLOWED_HOSTS` ให้ตรงกับโดเมนจริง หากเปิดเติมธนาคารให้ใส่ `BANK_NAME`, `BANK_ACCOUNT_NAME`, `BANK_ACCOUNT_NUMBER`, `SLIPOK_API_KEY` และ `SLIPOK_BRANCH_ID` เพิ่มด้วย ส่วนค่า runtime อื่นใช้ค่าเริ่มต้นจากเอกสาร/โค้ดได้
 
 `OUTBOX_POLL_SECONDS` กำหนดช่วงตรวจคิวส่งข้อความเมื่อคิวว่าง ค่าเริ่มต้น 2 วินาทีช่วยจำกัดการถามฐานข้อมูลซ้ำขณะไม่มีงาน; ลดค่านี้ได้หากต้องการให้เริ่มส่งไวขึ้น แต่จะเพิ่มจำนวนคำขอฐานข้อมูลตอนคิวว่าง
 

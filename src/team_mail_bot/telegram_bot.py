@@ -300,8 +300,9 @@ class TelegramController:
         await state.set_state('bank_slip')
         await state.update_data(bank_topup_id=request['id'])
         amount = Decimal(expected) / 100
+        bank_name = f'ธนาคาร: {self.settings.bank_name}\n' if self.settings.bank_name else ''
         await self.say(message,
-            f'🏦 เติมเงินผ่านบัญชีธนาคาร\nชื่อบัญชี: {self.settings.bank_account_name}\n'
+            f'🏦 เติมเงินผ่านบัญชีธนาคาร\n{bank_name}ชื่อบัญชี: {self.settings.bank_account_name}\n'
             f'เลขบัญชี: {self.settings.bank_account_number}\nยอดที่ต้องโอน: {amount:.2f} บาท\n'
             f'ได้รับประมาณ: {format_units(request["credited_units"])} credit\n'
             f'โอนภายใน 15 นาที (ก่อน {expiry}) แล้วส่งรูปสลิปในแชทนี้\n'

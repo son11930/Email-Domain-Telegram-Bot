@@ -45,11 +45,13 @@ def test_binance_base_url_cannot_forward_keys_to_arbitrary_host():
 
 def test_bank_details_and_slipok_credentials_load_without_repr_leak():
     settings = Settings.from_env({
+        'BANK_NAME': 'SCB',
         'BANK_ACCOUNT_NAME': 'Sample Receiver',
         'BANK_ACCOUNT_NUMBER': '000-000000-0',
         'SLIPOK_API_KEY': 'private-key',
         'SLIPOK_BRANCH_ID': 'branch-123',
     })
+    assert settings.bank_name == 'SCB'
     assert settings.bank_account_name == 'Sample Receiver'
     assert settings.bank_account_number == '000-000000-0'
     assert settings.slipok_configured

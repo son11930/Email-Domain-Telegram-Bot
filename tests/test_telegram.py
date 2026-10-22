@@ -26,7 +26,8 @@ def settings():
     return SimpleNamespace(admin_ids=frozenset({99}), owner_id=99,
                            price_units=30_000_000, max_order_quantity=100,
                            binance_receiver_id='123456', bank_account_name='Receiver',
-                           bank_account_number='000-000000-0', slipok_configured=True)
+                           bank_account_number='000-000000-0', bank_name='SCB',
+                           slipok_configured=True)
 
 
 def message(user_id=1, text='/start', chat_type='private'):
@@ -214,6 +215,7 @@ def test_bank_topup_shows_account_exact_amount_credit_and_15_minute_window():
     run(controller.message(amount_msg, ui))
     assert svc.create_bank_topup.call_args.args == (1, 15_000)
     shown = amount_msg.answer.await_args.args[0]
+    assert 'ธนาคาร: SCB' in shown
     assert 'Receiver' in shown and '000-000000-0' in shown
     assert '150.37 บาท' in shown and '4.48865672 credit' in shown
     assert ui.name == 'bank_slip'
