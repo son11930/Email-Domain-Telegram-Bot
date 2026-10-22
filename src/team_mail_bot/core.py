@@ -30,6 +30,8 @@ from .models import (
 
 UNITS = 100_000_000
 MAX_UNITS = 9_000_000_000_000_000
+BANK_RATE_SATANG = 3_450
+MAX_BANK_RATE_SATANG = 1_000_000_000
 
 class DomainError(Exception):
     """A safe, user-visible validation or business rule failure."""
@@ -57,11 +59,15 @@ def money(value, positive=False):
     if type(value) is not int or abs(value) > MAX_UNITS or (positive and value <= 0):
         raise DomainError('Invalid amount')
 
-def bank_satang_to_units(satang):
+def bank_satang_to_units(satang, rate_satang=BANK_RATE_SATANG):
     if type(satang) is not int or not 0 < satang <= 1_000_000_000:
         raise DomainError('Invalid bank transfer amount')
-    quotient, remainder = divmod(satang * UNITS, 3350)
-    return quotient + (1 if remainder * 2 >= 3350 else 0)
+    if type(rate_satang) is not int or not 0 < rate_satang <= MAX_BANK_RATE_SATANG:
+        raise DomainError('Invalid bank credit rate')
+    quotient, remainder = divmod(satang * UNITS, rate_satang)
+    units = quotient + (1 if remainder * 2 >= rate_satang else 0)
+    money(units, True)
+    return units
 
 def request_key(value):
     if not isinstance(value, str) or not value.strip() or len(value) > 120:
@@ -146,7 +152,7 @@ class AppService:
                     'total_sales_units': session.scalar(select(func.coalesce(func.sum(Order.total_units), 0))),
                     'total_topup_units': session.scalar(select(func.coalesce(func.sum(Payment.amount_units), 0)).where(Payment.status == 'paid')) +
                                          session.scalar(select(func.coalesce(func.sum(BankTopup.credited_units), 0)).where(BankTopup.status == 'paid')),
-                    'price_units': self._price(session)}
+                    'price_units': self._price(session), 'bank_rate_satang': self._bank_rate(session)}
 
     def _price(self, session, lock=False, *, shared_lock=False):
         insert_once(session, Setting, {'name': 'price_units', 'value': self.price_units}, 'name')
@@ -174,6 +180,32 @@ class AppService:
             session.add(Audit(actor_id=actor_id, action='set_price', details={
                 'before_units': before, 'price_units': price_units, 'reason': reason}))
             return {'price_units': price_units}
+
+    def _bank_rate(self, session, lock=False, *, shared_lock=False):
+        insert_once(session, Setting, {'name': 'bank_rate_satang', 'value': BANK_RATE_SATANG}, 'name')
+        query = select(Setting).where(Setting.name == 'bank_rate_satang')
+        row = session.scalar(query.with_for_update(read=shared_lock) if lock or shared_lock else query)
+        if type(row.value) is not int or not 0 < row.value <= MAX_BANK_RATE_SATANG:
+            raise DomainError('Invalid bank credit rate setting')
+        return row.value
+
+    def get_bank_rate_satang(self):
+        with self.factory.begin() as session:
+            return self._bank_rate(session)
+
+    def set_bank_rate(self, actor_id, rate_satang, reason):
+        actor_id = actor_text(actor_id)
+        if type(rate_satang) is not int or not 0 < rate_satang <= MAX_BANK_RATE_SATANG:
+            raise DomainError('Invalid bank credit rate')
+        reason_text(reason)
+        with self.factory.begin() as session:
+            self._bank_rate(session, True)
+            row = session.get(Setting, 'bank_rate_satang')
+            before = row.value
+            row.value = rate_satang
+            session.add(Audit(actor_id=actor_id, action='set_bank_rate', details={
+                'before_satang': before, 'bank_rate_satang': rate_satang, 'reason': reason}))
+            return {'bank_rate_satang': rate_satang}
 
     def preview_import(self, text):
         if not isinstance(text, str) or len(text.encode('utf-8')) > 2_000_000:
@@ -511,6 +543,7 @@ class AppService:
         now = utcnow()
         with self.factory.begin() as session:
             self._user(session, user_id, True)
+            bank_rate_satang = self._bank_rate(session, shared_lock=True)
             pending = session.scalar(select(BankTopup).where(
                 BankTopup.user_id == user_id, BankTopup.status == 'pending').order_by(
                     BankTopup.created_at.desc()).with_for_update())
@@ -533,7 +566,7 @@ class AppService:
                 topup_id = str(uuid4())
                 if not insert_once(session, BankTopup, {
                     'id': topup_id, 'user_id': user_id, 'base_satang': base_satang,
-                    'expected_satang': expected, 'credited_units': bank_satang_to_units(expected),
+                    'expected_satang': expected, 'credited_units': bank_satang_to_units(expected, bank_rate_satang),
                     'status': 'pending', 'created_at': now,
                     'expires_at': now + timedelta(minutes=15)}, 'expected_satang'):
                     continue

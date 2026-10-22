@@ -150,6 +150,35 @@ def test_bank_topup_converts_randomized_satang_and_credits_once(service):
                                        topup['expected_satang'], occurred_at)['status'] == 'paid'
     assert service.get_user(7)['balance_units'] == topup['credited_units']
 
+def test_bank_topup_rate_is_persistent_and_pending_request_keeps_original_credit(service):
+    from team_mail_bot.core import AppService, bank_satang_to_units
+
+    service.ensure_user(7)
+    assert service.get_bank_rate_satang() == 3450
+    first = service.create_bank_topup(7, 15_000)
+    assert first['credited_units'] == bank_satang_to_units(first['expected_satang'], 3450)
+
+    assert service.set_bank_rate(1, 5000, 'owner rate change') == {'bank_rate_satang': 5000}
+    restarted = AppService(service.factory, topup_cooldown_seconds=0)
+    assert restarted.get_bank_rate_satang() == 5000
+    still_pending = restarted.create_bank_topup(7, 15_000)
+    assert still_pending['id'] == first['id']
+    assert still_pending['credited_units'] == first['credited_units']
+
+    restarted.cancel_bank_topup(7, first['id'])
+    second = restarted.create_bank_topup(7, 15_000)
+    assert second['credited_units'] == bank_satang_to_units(second['expected_satang'], 5000)
+    audit = restarted.list_audit()[0]
+    assert audit['action'] == 'set_bank_rate'
+    assert audit['details'] == {
+        'before_satang': 3450, 'bank_rate_satang': 5000, 'reason': 'owner rate change'}
+
+
+@pytest.mark.parametrize(('rate', 'reason'), [(0, 'bad'), (-1, 'bad'), (3450, ''), (True, 'bad')])
+def test_bank_rate_rejects_invalid_updates(service, rate, reason):
+    with pytest.raises(DomainError):
+        service.set_bank_rate(1, rate, reason)
+
 def test_bank_topup_rejects_late_and_wrong_amount_without_credit(service):
     from datetime import timedelta
 

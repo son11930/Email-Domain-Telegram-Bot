@@ -20,7 +20,7 @@ class Auth:
 
 class Service:
     def summary(self):
-        return {'available': 2}
+        return {'available': 2, 'bank_rate_satang': 3450}
 
     def list_users(self, query=''):
         return [{'id': 1, 'username': '<script>alert(1)</script>', 'balance_units': 30000000}]
@@ -41,7 +41,8 @@ def client():
     service.expire_topups = Mock(return_value=0)
     service.history = Mock(return_value={'ledger': []})
     service.get_price = Mock(return_value=30000000)
-    for method in ('adjust_credit', 'delete_email', 'set_price', 'refund_order', 'review_payment'):
+    service.get_bank_rate_satang = Mock(return_value=3450)
+    for method in ('adjust_credit', 'delete_email', 'set_price', 'set_bank_rate', 'refund_order', 'review_payment'):
         setattr(service, method, Mock(return_value={}))
     service.delete_emails = Mock(return_value={'deleted': 1})
     c = TestClient(create_app(service, settings, Auth()), base_url='https://testserver')
@@ -90,6 +91,9 @@ def test_pages_credit_preview_confirm_and_logout():
     login(c)
     for path in ('/', '/users', '/inventory', '/orders', '/topups', '/audit', '/settings', '/users/1/history'):
         assert c.get(path).status_code == 200
+    assert 'โอนธนาคาร: 1 credit = 34.50 บาท' in c.get('/').text
+    settings = c.get('/settings').text
+    assert 'อัตราเติมเงินธนาคารปัจจุบัน 34.50 บาท / credit' in settings
     token = csrf(c.get('/users'))
     response = c.post('/credit/preview', data={'csrf': token, 'user_id': '1', 'amount': '0.5', 'mode': 'delta', 'reason': 'แก้ยอด'})
     assert response.status_code == 200
@@ -218,18 +222,80 @@ def test_import_upload_preview_and_delete():
     assert c.post('/inventory/preview', data={'csrf': token}, files={'file': ('file.txt', b'x' * 262145)}).status_code == 400
 
 
-@pytest.mark.parametrize('action', ['price', 'refund', 'review'])
+@pytest.mark.parametrize('action', ['price', 'refund', 'review', 'bank_rate'])
 def test_management_confirm(action):
     c = client()
     login(c)
     token = csrf(c.get('/settings'))
-    data = {'csrf': token, 'action': action, 'reason': 'verified by owner', 'price': '0.3',
+    data = {'csrf': token, 'action': action, 'reason': 'verified by owner', 'price': '0.3', 'bank_rate': '34.50',
         'order_id': 'o1', 'transaction_id': 't1', 'user_id': '1'}
     response = c.post('/manage/preview', data=data)
     assert response.status_code == 200
-    data['key'] = 'request-unique-key-123456'
+    data['key'] = re.search(r'name="key" value="([^"]+)"', response.text).group(1)
+    data['signature'] = re.search(r'name="signature" value="([^"]+)"', response.text).group(1)
     assert c.post('/manage/confirm', data=data).status_code == 200
-    getattr(c.service, {'price': 'set_price', 'refund': 'refund_order', 'review': 'review_payment'}[action]).assert_called_once()
+    getattr(c.service, {'price': 'set_price', 'bank_rate': 'set_bank_rate',
+        'refund': 'refund_order', 'review': 'review_payment'}[action]).assert_called_once()
+    if action == 'bank_rate':
+        c.service.set_bank_rate.assert_called_once_with('web:admin-sub', 3450, 'verified by owner')
+
+
+@pytest.mark.parametrize('value', ['0', '-1', '34.501', 'NaN', '10000001'])
+def test_management_rejects_invalid_bank_rate(value):
+    c = client()
+    login(c)
+    token = csrf(c.get('/settings'))
+    data = {'csrf': token, 'action': 'bank_rate', 'reason': 'verified by owner', 'bank_rate': value}
+    response = c.post('/manage/preview', data=data)
+    assert response.status_code == 200
+    data['key'] = re.search(r'name="key" value="([^"]+)"', response.text).group(1)
+    data['signature'] = re.search(r'name="signature" value="([^"]+)"', response.text).group(1)
+    assert c.post('/manage/confirm', data=data).status_code == 400
+    c.service.set_bank_rate.assert_not_called()
+
+
+def test_management_rejects_bank_rate_changed_after_preview():
+    c = client()
+    login(c)
+    token = csrf(c.get('/settings'))
+    data = {'csrf': token, 'action': 'bank_rate', 'reason': 'verified by owner', 'bank_rate': '34.50'}
+    response = c.post('/manage/preview', data=data)
+    data['key'] = re.search(r'name="key" value="([^"]+)"', response.text).group(1)
+    data['signature'] = re.search(r'name="signature" value="([^"]+)"', response.text).group(1)
+    data['bank_rate'] = '1.00'
+    assert c.post('/manage/confirm', data=data).status_code == 400
+    c.service.set_bank_rate.assert_not_called()
+
+
+def test_management_signature_keeps_fields_unambiguous_with_null_bytes():
+    c = client()
+    login(c)
+    token = csrf(c.get('/settings'))
+    data = {'csrf': token, 'action': 'bank_rate', 'reason': 'verified by owner',
+        'bank_rate': '34.50\x00x', 'order_id': 'y'}
+    response = c.post('/manage/preview', data=data)
+    assert response.status_code == 200
+    data['key'] = re.search(r'name="key" value="([^"]+)"', response.text).group(1)
+    data['signature'] = re.search(r'name="signature" value="([^"]+)"', response.text).group(1)
+    data['bank_rate'] = '34.50'
+    data['order_id'] = 'x\x00y'
+    assert c.post('/manage/confirm', data=data).status_code == 400
+    c.service.set_bank_rate.assert_not_called()
+
+
+def test_management_signature_rejects_values_extended_past_signed_limit():
+    c = client()
+    login(c)
+    token = csrf(c.get('/settings'))
+    prefix = '0' * 30 + '34'
+    data = {'csrf': token, 'action': 'bank_rate', 'reason': 'verified by owner', 'bank_rate': prefix}
+    response = c.post('/manage/preview', data=data)
+    assert response.status_code == 200
+    data['key'] = re.search(r'name="key" value="([^"]+)"', response.text).group(1)
+    data['signature'] = re.search(r'name="signature" value="([^"]+)"', response.text).group(1)
+    data['bank_rate'] = prefix + '50'
+    assert c.post('/manage/confirm', data=data).status_code == 400
+    c.service.set_bank_rate.assert_not_called()
 
 
 def test_input_failures_and_login_limit():

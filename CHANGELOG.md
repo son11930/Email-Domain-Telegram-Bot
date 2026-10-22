@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - 2026-10-21
+## [Unreleased] - 2026-10-23
 
 ### Security
 - Limited SlipOK verification to five reserved attempts per Telegram ID per Thailand calendar day using persistent database slots, and rejected previously seen image SHA-256 hashes before provider submission.
@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Telegram bank top-ups
 - Added optional `BANK_NAME` configuration and display it in bank transfer instructions so users can identify the recipient bank before transferring.
+- Changed the default bank conversion to 34.50 THB per credit and added an audited, confirmation-based rate editor in the admin dashboard; existing top-up requests retain their stored credit amount.
 
 ### Bank transfer top-ups
 - Added a bounded SlipOK client and private-chat bank transfer flow that displays configured recipient details, randomized satang amount, and expected credit.

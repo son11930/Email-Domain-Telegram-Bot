@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
+import json
 import secrets
 import time
 from dataclasses import dataclass
@@ -39,7 +42,8 @@ def audit_action(value):
     return {
         'import_emails': 'เพิ่มอีเมล', 'delete_email': 'ลบอีเมล',
         'delete_emails': 'ลบอีเมลหลายรายการ', 'adjust_credit': 'ปรับเครดิต',
-        'set_price': 'เปลี่ยนราคา', 'refund_order': 'คืนเครดิตคำสั่งซื้อ',
+        'set_price': 'เปลี่ยนราคา', 'set_bank_rate': 'เปลี่ยนอัตราเติมเงินธนาคาร',
+        'refund_order': 'คืนเครดิตคำสั่งซื้อ',
         'review_payment': 'ตรวจสอบและยืนยันเงินเข้า',
     }.get(value, str(value))
 
@@ -55,11 +59,15 @@ def audit_details(value):
         pieces.append('ปรับเครดิต ' + ('+' if delta > 0 else '') + format(delta, 'f') + ' credit')
     elif 'price_units' in value:
         pieces.append('ราคาใหม่ ' + format(Decimal(value['price_units']) / UNITS, 'f') + ' credit/เมล')
+    elif 'bank_rate_satang' in value:
+        pieces.append('อัตราใหม่ ' + format(Decimal(value['bank_rate_satang']) / 100, '.2f') + ' บาท/credit')
     elif 'added' in value:
         pieces.append('เพิ่ม ' + str(value['added']) + ' เมล · ซ้ำ ' + str(value.get('duplicate', 0))
                       + ' · ไม่ผ่าน ' + str(value.get('invalid', 0)))
     if 'before_units' in value:
         pieces.append('ราคาเดิม ' + format(Decimal(value['before_units']) / UNITS, 'f') + ' credit/เมล')
+    if 'before_satang' in value:
+        pieces.append('อัตราเดิม ' + format(Decimal(value['before_satang']) / 100, '.2f') + ' บาท/credit')
     if 'email_id' in value:
         pieces.append('รหัสอีเมล ' + str(value['email_id']))
     if 'email_ids' in value:
@@ -123,6 +131,34 @@ def amount(value):
         raise HTTPException(400, 'จำนวนเครดิตไม่ถูกต้อง') from None
 
 
+def bank_rate_satang(value):
+    try:
+        number = Decimal(str(value))
+        scaled = number * 100
+        if (not number.is_finite() or number <= 0 or scaled != scaled.to_integral_value()
+                or scaled > 1_000_000_000):
+            raise ValueError()
+        return int(scaled)
+    except (InvalidOperation, ValueError, OverflowError):
+        raise ValueError() from None
+
+
+def management_signature(secret, actor, payload):
+    fields = ('action', 'reason', 'key', 'price', 'bank_rate', 'order_id', 'transaction_id', 'user_id')
+    message = json.dumps([actor, *(str(payload.get(field, '')) for field in fields)],
+                         ensure_ascii=False, separators=(',', ':')).encode()
+    return hmac.new(str(secret).encode(), message, hashlib.sha256).hexdigest()
+
+
+def management_fields(values):
+    limits = {'price': 120, 'bank_rate': 32, 'order_id': 120,
+              'transaction_id': 256, 'user_id': 120}
+    fields = {name: str(values.get(name, '')) for name in limits}
+    if any(len(value) > limits[name] for name, value in fields.items()):
+        raise HTTPException(400, 'ข้อมูลยืนยันยาวเกินกำหนด')
+    return fields
+
+
 def create_app(service, settings, auth_client=None):
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings = settings
@@ -132,6 +168,7 @@ def create_app(service, settings, auth_client=None):
     auth = auth_client or SupabaseAuth(settings)
     templates = Jinja2Templates(directory=str(Path(__file__).parent / 'templates'))
     templates.env.filters['credits'] = lambda n: format(Decimal(n or 0) / UNITS, 'f')
+    templates.env.filters['baht'] = lambda satang: format(Decimal(satang or 0) / 100, '.2f')
     templates.env.filters['thai_datetime'] = thai_datetime
     templates.env.filters['audit_action'] = audit_action
     templates.env.filters['audit_details'] = audit_details
@@ -429,19 +466,18 @@ def create_app(service, settings, auth_client=None):
     def settings_page(request: Request):
         session(request)
         return view(request, 'จัดการรายการและราคา', settings_page=True, price=service.get_price(),
-            payments=service.list_payments())
+            bank_rate_satang=service.get_bank_rate_satang(), payments=service.list_payments())
 
     @app.post('/manage/preview')
     async def management_preview(request: Request):
-        _, values = await form(request)
+        current, values = await form(request)
         action = str(values.get('action', ''))
         reason = str(values.get('reason', '')).strip()
-        if action not in ('price', 'refund', 'review') or not 3 <= len(reason) <= 500:
+        if action not in ('price', 'bank_rate', 'refund', 'review') or not 3 <= len(reason) <= 500:
             raise HTTPException(400, 'ข้อมูลหรือเหตุผลไม่ถูกต้อง')
         payload = {'action': action, 'reason': reason, 'key': secrets.token_urlsafe(24)}
-        for field in ('price', 'order_id', 'transaction_id', 'user_id'):
-            limit = 256 if field == 'transaction_id' else 120
-            payload[field] = str(values.get(field, ''))[:limit]
+        payload.update(management_fields(values))
+        payload['signature'] = management_signature(settings.session_secret, 'web:' + current.subject, payload)
         return view(request, 'ยืนยันรายการสำคัญ', management=payload)
 
     @app.post('/manage/confirm')
@@ -453,17 +489,26 @@ def create_app(service, settings, auth_client=None):
         action = values.get('action')
         if not 3 <= len(reason) <= 500 or not 16 <= len(key) <= 100:
             raise HTTPException(400, 'ข้อมูลไม่ถูกต้อง')
+        payload = {'action': str(action or ''), 'reason': reason, 'key': key}
+        payload.update(management_fields(values))
+        signature = str(values.get('signature', ''))
+        expected_signature = management_signature(settings.session_secret, actor, payload)
+        if not secrets.compare_digest(signature, expected_signature):
+            raise HTTPException(400, 'ข้อมูลยืนยันไม่ตรงกับรายการที่ตรวจสอบ')
         try:
             if action == 'price':
-                price = amount(values.get('price', ''))
+                price = amount(payload['price'])
                 if price <= 0:
                     raise ValueError()
                 await asyncio.to_thread(service.set_price, actor, price, reason)
+            elif action == 'bank_rate':
+                rate_satang = bank_rate_satang(payload['bank_rate'])
+                await asyncio.to_thread(service.set_bank_rate, actor, rate_satang, reason)
             elif action == 'refund':
-                await asyncio.to_thread(service.refund_order, actor, str(values.get('order_id', ''))[:120], reason, 'web:' + key)
+                await asyncio.to_thread(service.refund_order, actor, payload['order_id'], reason, 'web:' + key)
             elif action == 'review':
-                await asyncio.to_thread(service.review_payment, actor, str(values.get('transaction_id', ''))[:256],
-                    int(values.get('user_id', 0)), reason, 'web:' + key)
+                await asyncio.to_thread(service.review_payment, actor, payload['transaction_id'],
+                    int(payload['user_id']), reason, 'web:' + key)
             else:
                 raise ValueError()
         except (ValueError, TypeError):
