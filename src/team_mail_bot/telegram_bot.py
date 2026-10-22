@@ -122,12 +122,12 @@ class TelegramController:
         price = await self.call('get_price')
         name = user.get('name')
         name = ' '.join(name.split())[:80] if isinstance(name, str) else ''
-        await self.say(message,
-                       f'📩 Nethinat Mail Service\nชื่อ: {name or "ไม่ระบุชื่อ"}\n'
-                       f'รหัสผู้ใช้: {user_id}\n'
-                       f'ยอดคงเหลือ: {format_units(user["balance_units"])} credit\n'
-                       f'ราคา: {format_units(price)} credit / เมล',
-                       main_menu(user_id, price, self.is_admin(user_id)))
+        text = (f'📩 Nethinat Mail Service\nชื่อ: {escape(name or "ไม่ระบุชื่อ")}\n'
+                f'รหัสผู้ใช้ (แตะค้างเพื่อคัดลอก): <code>{user_id}</code>\n'
+                f'ยอดคงเหลือ: {format_units(user["balance_units"])} credit\n'
+                f'ราคา: {format_units(price)} credit / เมล')
+        await message.answer(text, reply_markup=main_menu(
+            user_id, price, self.is_admin(user_id)), parse_mode='HTML')
 
     async def message(self, message: Message, state):
         if message.chat.type != 'private' or not message.from_user:

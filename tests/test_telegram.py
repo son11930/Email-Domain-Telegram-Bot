@@ -79,8 +79,9 @@ def test_main_menu_shows_name_with_telegram_id():
     run(controller.message(msg, state()))
 
     assert 'ชื่อ: Team Member' in msg.answer.await_args.args[0]
-    assert 'รหัสผู้ใช้: 1' in msg.answer.await_args.args[0]
+    assert 'รหัสผู้ใช้ (แตะค้างเพื่อคัดลอก): <code>1</code>' in msg.answer.await_args.args[0]
     assert 'Nethinat Mail Service' in msg.answer.await_args.args[0]
+    assert msg.answer.await_args.kwargs['parse_mode'] == 'HTML'
 
 
 def test_quick_buttons_bind_user_and_nonce():

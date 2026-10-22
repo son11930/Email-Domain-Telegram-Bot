@@ -1,5 +1,11 @@
 # Project Plan
 
+## งานเพิ่มเติม: ทำให้ Telegram user ID คัดลอกง่าย
+
+- สถานะ: โค้ดและ regression test เสร็จ; 201 tests ผ่าน, 7 PostgreSQL integration tests ข้ามเพราะไม่มี `TEST_DATABASE_URL`; Ruff ผ่าน; review ผ่าน; กำลังอัปเดต VPS ผ่าน manager
+- ขอบเขต: แสดง Telegram user ID ในข้อความหน้าแรกเป็นช่องคัดลอกของ Telegram โดยคงชื่อ ยอดเครดิต และเมนูเดิม
+- ตรวจด้วย regression test และทดสอบชุด Telegram เต็มก่อน deploy
+
 ## งานเพิ่มเติม: ปรับข้อความโอนเงินและชื่อบริการ
 
 - สถานะ: deploy ผ่าน manager แล้ว; bot, worker, web active; review ผ่าน; 201 tests ผ่าน, 7 PostgreSQL integration tests ข้ามเพราะไม่มี `TEST_DATABASE_URL`; Ruff ผ่าน

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - 2026-10-21
 
+### Telegram
+- Rendered the Telegram user ID as a copyable code field in the home message.
+
 ### User experience
 - Rebranded the Telegram home message and admin dashboard as Nethinat Mail Service.
 - Formatted bank account number and transfer amount as Telegram copyable code fields and removed the SlipOK provider name from customer-facing transfer instructions.
