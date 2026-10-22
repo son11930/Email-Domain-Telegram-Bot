@@ -2,9 +2,9 @@
 
 ## งานเพิ่มเติม: ปรับข้อความโอนเงินและชื่อบริการ
 
-- สถานะ: โค้ดและ regression tests เสร็จ; review ผ่าน; 201 tests ผ่าน, 7 PostgreSQL integration tests ข้ามเพราะไม่มี `TEST_DATABASE_URL`; Ruff ผ่าน
+- สถานะ: deploy ผ่าน manager แล้ว; bot, worker, web active; review ผ่าน; 201 tests ผ่าน, 7 PostgreSQL integration tests ข้ามเพราะไม่มี `TEST_DATABASE_URL`; Ruff ผ่าน
 - ขอบเขต: แสดงเลขบัญชีและยอดโอนเป็นช่องคัดลอกง่าย ตัดชื่อผู้ให้บริการตรวจสลิปออกจากข้อความผู้ใช้ และเปลี่ยน branding ที่ผู้ใช้เห็นเป็น Nethinat Mail Service
-- ตรวจ regression tests ของ Telegram และหน้า admin ก่อนอัปเดต VPS
+- ตรวจ regression tests ของ Telegram และหน้า admin; อัปเดต VPS ผ่านขั้นตอน manager และตรวจ service/Screen ครบสามตัว
 
 ## งานเพิ่มเติม: แสดงชื่อธนาคารใน Telegram
 
