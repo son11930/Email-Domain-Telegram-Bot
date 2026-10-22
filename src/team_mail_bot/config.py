@@ -37,6 +37,10 @@ class Settings:
     binance_api_secret: str = field(default="", repr=False)
     binance_receiver_id: str = ""
     binance_base_url: str = "https://api.binance.com"
+    bank_account_name: str = field(default="", repr=False)
+    bank_account_number: str = field(default="", repr=False)
+    slipok_api_key: str = field(default="", repr=False)
+    slipok_branch_id: str = field(default="", repr=False)
     supabase_url: str = ""
     supabase_publishable_key: str = field(default="", repr=False)
     web_admin_subjects: frozenset[str] = frozenset()
@@ -53,6 +57,11 @@ class Settings:
     payment_lookback_seconds: int = 86400
     outbox_poll_seconds: int = 2
     port: int = 8001
+
+    @property
+    def slipok_configured(self) -> bool:
+        return bool(self.slipok_api_key and self.slipok_branch_id
+                    and self.bank_account_name and self.bank_account_number)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "Settings":
@@ -87,6 +96,10 @@ class Settings:
             binance_api_secret=env.get("BINANCE_API_SECRET", ""),
             binance_receiver_id=env.get("BINANCE_RECEIVER_ID", ""),
             binance_base_url=binance_url,
+            bank_account_name=env.get("BANK_ACCOUNT_NAME", ""),
+            bank_account_number=env.get("BANK_ACCOUNT_NUMBER", ""),
+            slipok_api_key=env.get("SLIPOK_API_KEY", ""),
+            slipok_branch_id=env.get("SLIPOK_BRANCH_ID", ""),
             supabase_url=env.get("SUPABASE_URL", "").rstrip("/"),
             supabase_publishable_key=env.get("SUPABASE_PUBLISHABLE_KEY", ""),
             web_admin_subjects=frozenset(v.strip() for v in env.get("WEB_ADMIN_SUBJECTS", "").split(",") if v.strip()),

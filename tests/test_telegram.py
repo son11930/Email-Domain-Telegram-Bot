@@ -25,7 +25,8 @@ def run(coro):
 def settings():
     return SimpleNamespace(admin_ids=frozenset({99}), owner_id=99,
                            price_units=30_000_000, max_order_quantity=100,
-                           binance_receiver_id='123456')
+                           binance_receiver_id='123456', bank_account_name='Receiver',
+                           bank_account_number='000-000000-0', slipok_configured=True)
 
 
 def message(user_id=1, text='/start', chat_type='private'):
@@ -154,6 +155,7 @@ def test_bulk_requires_confirmation_and_preserves_order_request_on_replay():
     svc.purchase.assert_not_called()
     token = ui.data['nonce']
     run(controller.callback(callback(f'buy:{token}'), ui))
+    assert svc.purchase.call_args.kwargs['include_emails'] is False
     assert svc.purchase.call_args.args[1] == 2
     run(controller.callback(callback(f'buy:{token}'), ui))
     assert svc.purchase.call_args_list[0] == svc.purchase.call_args_list[1]
@@ -195,6 +197,65 @@ def test_topup_preset_custom_and_cancel_show_exact_amount():
     assert svc.request_topup.call_args.args == (1, 500_000_000)
     run(controller.callback(callback('cancel:topup-1'), ui))
     svc.cancel_topup.assert_called_once_with(1, 'topup-1')
+
+
+def test_bank_topup_shows_account_exact_amount_credit_and_15_minute_window():
+    from datetime import UTC, datetime, timedelta
+
+    svc, ui = service(), MemoryState()
+    now = datetime.now(UTC)
+    topup = {'id': 'bank-1', 'expected_satang': 15_037, 'credited_units': 448_865_672,
+             'created_at': now.isoformat(), 'expires_at': (now + timedelta(minutes=15)).isoformat()}
+    svc.create_bank_topup = Mock(return_value=topup)
+    controller = TelegramController(svc, settings(), slipok=Mock())
+    run(controller.callback(callback('topup'), ui))
+    run(controller.callback(callback('method:bank'), ui))
+    amount_msg = message(text='150.00')
+    run(controller.message(amount_msg, ui))
+    assert svc.create_bank_topup.call_args.args == (1, 15_000)
+    shown = amount_msg.answer.await_args.args[0]
+    assert 'Receiver' in shown and '000-000000-0' in shown
+    assert '150.37 บาท' in shown and '4.48865672 credit' in shown
+    assert ui.name == 'bank_slip'
+    assert ui.data['bank_topup_id'] == 'bank-1'
+
+
+def test_bank_slip_verification_credits_only_slipok_confirmed_payment():
+    from datetime import UTC, datetime
+    from decimal import Decimal
+
+    svc, ui = service(), MemoryState('bank_slip', {'bank_topup_id': 'bank-1'})
+    svc.get_bank_topup = Mock(return_value={'id': 'bank-1', 'status': 'pending',
+                                           'expected_satang': 15_037})
+    svc.complete_bank_topup = Mock(return_value={'status': 'paid'})
+    verifier = Mock(return_value={'trans_ref': 'unique-ref', 'amount': Decimal('150.37'),
+                                  'occurred_at': datetime.now(UTC)})
+    controller = TelegramController(svc, settings(), slipok=SimpleNamespace(verify_slip=verifier))
+    msg = message(text='')
+    msg.document = SimpleNamespace(file_name='receipt.jpg', file_id='file-1', file_size=20)
+
+    class FakeBot:
+        async def get_file(self, _file_id):
+            return SimpleNamespace(file_path='receipt/path')
+
+        async def download_file(self, _path, destination):
+            destination.write(b'12345678901234567890')
+
+    msg.bot = FakeBot()
+    run(controller.message(msg, ui))
+
+    verifier.assert_called_once()
+    svc.complete_bank_topup.assert_called_once_with(1, 'bank-1', 'unique-ref', 15_037,
+                                                     verifier.return_value['occurred_at'])
+    assert 'ตรวจสอบสลิปสำเร็จ' in msg.answer.await_args.args[0]
+
+
+def test_cancel_command_cancels_pending_bank_topup():
+    svc, ui = service(), MemoryState('bank_slip', {'bank_topup_id': 'bank-1'})
+    svc.cancel_bank_topup = Mock()
+    run(TelegramController(svc, settings()).message(message(text='/cancel'), ui))
+    svc.cancel_bank_topup.assert_called_once_with(1, 'bank-1')
+    assert ui.name is None
 
 
 def test_stock_history_and_resend_only_owner_requested():

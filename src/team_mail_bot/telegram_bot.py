@@ -8,6 +8,7 @@ import time
 from collections import OrderedDict
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
+from io import BytesIO
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -15,10 +16,18 @@ from aiogram import BaseMiddleware, Router
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from .core import DomainError
+from .slipok import MAX_IMAGE_BYTES, SlipOKError
 
 LOG = logging.getLogger(__name__)
 UNITS = 100_000_000
 MAX_UPLOAD = 512_000
+
+class BoundedBytesIO(BytesIO):
+    """Reject Telegram downloads that exceed the image memory budget."""
+    def write(self, data):
+        if self.tell() + len(data) > MAX_UPLOAD:
+            raise ValueError('Slip image is too large')
+        return super().write(data)
 
 
 def format_units(units: int) -> str:
@@ -93,9 +102,10 @@ class ChatGuard(BaseMiddleware):
 
 
 class TelegramController:
-    def __init__(self, service, settings):
+    def __init__(self, service, settings, slipok=None):
         self.service = service
         self.settings = settings
+        self.slipok = slipok
 
     def is_admin(self, user_id: int) -> bool:
         return user_id == self.settings.owner_id or user_id in self.settings.admin_ids
@@ -126,6 +136,10 @@ class TelegramController:
         try:
             await self.call('ensure_user', user_id, message.from_user.full_name)
             if text.split('@')[0] in ('/start', '/menu', '/cancel'):
+                current = await state.get_state()
+                data = await state.get_data()
+                if current == 'bank_slip' and data.get('bank_topup_id'):
+                    await self.call('cancel_bank_topup', user_id, data['bank_topup_id'])
                 await state.clear()
                 return await self.menu(message, user_id)
             current = await state.get_state()
@@ -137,6 +151,11 @@ class TelegramController:
             if current == 'topup':
                 amount = parse_amount(text, decimals=2)
                 return await self.topup(message, user_id, amount, state)
+            if current == 'bank_topup_amount':
+                amount = parse_amount(text, decimals=2)
+                return await self.bank_topup(message, user_id, amount // 1_000_000, state)
+            if current == 'bank_slip':
+                return await self.verify_bank_slip(message, user_id, state)
             if current == 'admin_import':
                 return await self.import_preview(message, state)
             if current == 'admin_credit':
@@ -185,14 +204,30 @@ class TelegramController:
                 await state.set_state(action)
                 if action == 'bulk':
                     return await self.say(message, f'พิมพ์จำนวนเมล (1–{self.settings.max_order_quantity})')
+                return await self.say(message, 'เลือกวิธีเติมเครดิต', keyboard(
+                    [('Binance Pay / UID', 'method:binance'), ('โอนธนาคาร / ส่งสลิป', 'method:bank')],
+                    [('ยกเลิก', 'menu')]))
+            if action == 'method:binance':
+                await state.clear()
+                await state.set_state('topup')
                 return await self.say(message, 'เลือกยอด USDT หรือพิมพ์ยอดไม่เกิน 2 ทศนิยม', keyboard(
                     [('1 USDT', 'fund:1'), ('5 USDT', 'fund:5')],
                     [('10 USDT', 'fund:10'), ('20 USDT', 'fund:20')], [('ยกเลิก', 'menu')]))
+            if action == 'method:bank':
+                if not getattr(self.settings, 'slipok_configured', False) or self.slipok is None:
+                    return await self.say(message, 'ระบบโอนธนาคารยังตั้งค่าไม่ครบ กรุณาใช้ Binance Pay ชั่วคราว')
+                await state.clear()
+                await state.set_state('bank_topup_amount')
+                return await self.say(message, 'พิมพ์ยอดเงินบาทที่ต้องการเติม (ขั้นต่ำ 150 บาท, ไม่เกิน 10,000 บาท)')
             if action.startswith('fund:'):
                 return await self.topup(message, user_id, parse_amount(action[5:], decimals=2), state)
             if action.startswith('cancel:'):
                 await self.call('cancel_topup', user_id, action[7:])
                 return await self.say(message, 'ยกเลิกคำขอแล้ว หากโอนแล้วกรุณาติดต่อแอดมิน')
+            if action.startswith('cancelbank:'):
+                await self.call('cancel_bank_topup', user_id, action[11:])
+                await state.clear()
+                return await self.say(message, 'ยกเลิกคำขอแล้ว หากโอนแล้วกรุณาติดต่อเจ้าของเป็นการส่วนตัว')
             if action == 'balance':
                 return await self.menu(message, user_id)
             if action == 'stock':
@@ -235,7 +270,8 @@ class TelegramController:
         await self.buy(message, user_id, data['quantity'], f'tg:{user_id}:{data["nonce"]}', data['price'])
 
     async def buy(self, message, user_id, quantity, key, price):
-        order = await self.call('purchase', user_id, quantity, key, expected_price_units=price)
+        order = await self.call('purchase', user_id, quantity, key,
+                                expected_price_units=price, include_emails=False)
         await self.say(message, f'✅ บันทึกรายการ {order["id"]} แล้ว ระบบกำลังส่งเมล\n'
                        'ดูหรือขอส่งรายการเดิมได้ในประวัติ')
         await self.menu(message, user_id)
@@ -254,6 +290,71 @@ class TelegramController:
                        'กรุณาโอนยอดตรงทุกหลัก ระบบตรวจอัตโนมัติ ไม่ต้องส่งสลิป\n'
                        'หากหมดอายุหรือยกเลิกแล้วอย่าโอนตามคำขอนี้',
                        keyboard([('ยกเลิกคำขอ', f'cancel:{request["id"]}')], [('เมนูหลัก', 'menu')]))
+
+    async def bank_topup(self, message, user_id, base_satang, state):
+        request = await self.call('create_bank_topup', user_id, base_satang)
+        expected = request['expected_satang']
+        expiry = datetime.fromisoformat(request['expires_at']).astimezone(
+            ZoneInfo('Asia/Bangkok')).strftime('%H:%M น. เวลาไทย')
+        await state.clear()
+        await state.set_state('bank_slip')
+        await state.update_data(bank_topup_id=request['id'])
+        amount = Decimal(expected) / 100
+        await self.say(message,
+            f'🏦 เติมเงินผ่านบัญชีธนาคาร\nชื่อบัญชี: {self.settings.bank_account_name}\n'
+            f'เลขบัญชี: {self.settings.bank_account_number}\nยอดที่ต้องโอน: {amount:.2f} บาท\n'
+            f'ได้รับประมาณ: {format_units(request["credited_units"])} credit\n'
+            f'โอนภายใน 15 นาที (ก่อน {expiry}) แล้วส่งรูปสลิปในแชทนี้\n'
+            'ระบบจะเพิ่มเครดิตเมื่อ SlipOK ยืนยันยอด ผู้รับ เวลา และสลิปไม่ซ้ำเท่านั้น',
+            keyboard([('ยกเลิกคำขอ', f'cancelbank:{request["id"]}')], [('เมนูหลัก', 'menu')]))
+
+    async def verify_bank_slip(self, message, user_id, state):
+        data = await state.get_data()
+        topup_id = data.get('bank_topup_id')
+        if not topup_id:
+            await state.clear()
+            return await self.say(message, 'ไม่พบคำขอเติมเงิน กรุณาเริ่มรายการใหม่')
+        if self.slipok is None:
+            return await self.say(message, 'ระบบตรวจสลิปยังไม่พร้อม กรุณาติดต่อเจ้าของเป็นการส่วนตัว')
+        photo = getattr(message, 'photo', None) or []
+        document = getattr(message, 'document', None)
+        if photo:
+            file_id = photo[-1].file_id
+            declared_size = getattr(photo[-1], 'file_size', None)
+            filename = 'telegram-slip.jpg'
+        elif document:
+            filename = getattr(document, 'file_name', '') or ''
+            if not filename.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                return await self.say(message, 'ส่งได้เฉพาะไฟล์ภาพสลิป PNG, JPG หรือ WEBP')
+            file_id = document.file_id
+            declared_size = getattr(document, 'file_size', None)
+        else:
+            return await self.say(message, 'กรุณาส่งรูปสลิปเป็นภาพหรือไฟล์ภาพ')
+        if declared_size is not None and (declared_size < 12 or declared_size > MAX_IMAGE_BYTES):
+            return await self.say(message, 'ไฟล์ภาพต้องมีขนาดไม่เกิน 500 KB')
+        try:
+            request = await self.call('get_bank_topup', user_id, topup_id)
+            if request['status'] not in ('pending', 'failed'):
+                return await self.say(message, 'คำขอนี้ถูกใช้หรือยกเลิกแล้ว กรุณาติดต่อเจ้าของหากโอนเงินแล้ว')
+            bot_file = await message.bot.get_file(file_id)
+            destination = BoundedBytesIO()
+            await message.bot.download_file(bot_file.file_path, destination=destination)
+            image = destination.getvalue()
+            if len(image) > MAX_IMAGE_BYTES:
+                return await self.say(message, 'ไฟล์ภาพต้องมีขนาดไม่เกิน 500 KB')
+            verified = await asyncio.to_thread(self.slipok.verify_slip, image, filename,
+                                               Decimal(request['expected_satang']) / 100)
+            satang = int(verified['amount'] * 100)
+            result = await self.call('complete_bank_topup', user_id, topup_id,
+                                     verified['trans_ref'], satang, verified['occurred_at'])
+            await state.clear()
+            if result['status'] == 'paid':
+                return await self.say(message, '✅ ตรวจสอบสลิปสำเร็จ เติมเครดิตเข้าบัญชีแล้ว')
+            return await self.say(message, 'ตรวจสลิปได้แต่ข้อมูลไม่ตรงหรือหมดเวลา จึงยังไม่เติมเครดิต กรุณาติดต่อเจ้าของเป็นการส่วนตัว')
+        except (ValueError, DomainError) as exc:
+            return await self.report(message, exc)
+        except SlipOKError:
+            return await self.say(message, 'ตรวจสลิปไม่สำเร็จ จึงยังไม่เติมเครดิต กรุณาติดต่อเจ้าของเป็นการส่วนตัว')
 
     async def history(self, message, user_id):
         data = await self.call('history', user_id)
@@ -407,9 +508,9 @@ class TelegramController:
         await state.clear()
 
 
-def create_router(service, settings) -> Router:
+def create_router(service, settings, slipok=None) -> Router:
     router = Router(name='team_mail')
-    controller = TelegramController(service, settings)
+    controller = TelegramController(service, settings, slipok)
     guard = ChatGuard()
     router.message.outer_middleware(guard)
     router.callback_query.outer_middleware(guard)

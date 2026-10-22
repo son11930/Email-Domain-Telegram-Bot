@@ -7,6 +7,7 @@ def test_defaults_are_public_bot_and_thirty_cent_price():
     settings = Settings.from_env({})
     assert settings.price_units == 30_000_000
     assert settings.topup_precision == 4
+    assert settings.outbox_poll_seconds == 2
     assert settings.admin_ids == frozenset()
 
 
@@ -40,3 +41,16 @@ def test_worker_requires_real_credentials_and_discord_pair():
 def test_binance_base_url_cannot_forward_keys_to_arbitrary_host():
     with pytest.raises(ValueError):
         Settings.from_env({"BINANCE_BASE_URL": "https://attacker.example"})
+
+
+def test_bank_details_and_slipok_credentials_load_without_repr_leak():
+    settings = Settings.from_env({
+        'BANK_ACCOUNT_NAME': 'Sample Receiver',
+        'BANK_ACCOUNT_NUMBER': '000-000000-0',
+        'SLIPOK_API_KEY': 'private-key',
+        'SLIPOK_BRANCH_ID': 'branch-123',
+    })
+    assert settings.bank_account_name == 'Sample Receiver'
+    assert settings.bank_account_number == '000-000000-0'
+    assert settings.slipok_configured
+    assert 'private-key' not in repr(settings)

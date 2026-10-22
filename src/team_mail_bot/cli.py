@@ -27,14 +27,20 @@ def build_service(settings):
 async def run_bot(settings, service):
     from aiogram import Bot, Dispatcher
 
+    from .slipok import SlipOKClient
     from .telegram_bot import create_router
     bot = Bot(settings.telegram_bot_token)
+    slipok = (SlipOKClient(settings.slipok_api_key, settings.slipok_branch_id)
+              if settings.slipok_configured else None)
     dispatcher = Dispatcher()
-    dispatcher.include_router(create_router(service, settings))
+    router = create_router(service, settings, slipok) if slipok else create_router(service, settings)
+    dispatcher.include_router(router)
     try:
         await dispatcher.start_polling(bot, close_bot_session=False)
     finally:
         await bot.session.close()
+        if slipok is not None:
+            slipok.close()
 
 
 async def run_worker(settings, service):
@@ -54,6 +60,7 @@ async def run_worker(settings, service):
             started = time.monotonic()
             try:
                 await asyncio.to_thread(service.expire_topups)
+                await asyncio.to_thread(service.expire_bank_topups)
                 count = await asyncio.to_thread(poller.poll_once)
                 LOG.info('Payment reconciliation completed: %d events', count)
             except Exception as exc:  # noqa: BLE001 - isolate failures and redact provider details.

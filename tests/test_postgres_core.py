@@ -73,6 +73,23 @@ def test_postgres_duplicate_payment_race(pg_service):
     assert service.get_user(7)['balance_units'] == topup['expected_units']
     assert len(service.history(7)['ledger']) == 1
 
+
+def test_postgres_duplicate_bank_slip_race_credits_once(pg_service):
+    from datetime import datetime, timedelta
+
+    service = pg_service
+    service.ensure_user(7)
+    topup = service.create_bank_topup(7, 15_000)
+    occurred_at = datetime.fromisoformat(topup['created_at']) + timedelta(seconds=2)
+    def process(_):
+        return service.complete_bank_topup(7, topup['id'], 'unique-bank-slip',
+                                           topup['expected_satang'], occurred_at)
+    with ThreadPoolExecutor(2) as executor:
+        results = list(executor.map(process, range(2)))
+    assert all(row['status'] == 'paid' for row in results)
+    assert service.get_user(7)['balance_units'] == topup['credited_units']
+    assert len(service.history(7)['ledger']) == 1
+
 def test_postgres_distinct_payments_cannot_double_credit_reservation(pg_service, monkeypatch):
     from datetime import datetime
     from threading import Barrier

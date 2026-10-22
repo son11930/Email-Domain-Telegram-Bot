@@ -11,6 +11,8 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from .models import (
     AmountLease,
     Audit,
+    BankPayment,
+    BankTopup,
     Checkpoint,
     Email,
     Ledger,
@@ -51,6 +53,12 @@ def positive_id(value):
 def money(value, positive=False):
     if type(value) is not int or abs(value) > MAX_UNITS or (positive and value <= 0):
         raise DomainError('Invalid amount')
+
+def bank_satang_to_units(satang):
+    if type(satang) is not int or not 0 < satang <= 1_000_000_000:
+        raise DomainError('Invalid bank transfer amount')
+    quotient, remainder = divmod(satang * UNITS, 3350)
+    return quotient + (1 if remainder * 2 >= 3350 else 0)
 
 def request_key(value):
     if not isinstance(value, str) or not value.strip() or len(value) > 120:
@@ -126,12 +134,15 @@ class AppService:
     def summary(self):
         with self.factory() as session:
             count = lambda model, *clauses: session.scalar(select(func.count()).select_from(model).where(*clauses))
+            paid_bank = count(BankPayment, BankPayment.status == 'paid')
+            review_bank = count(BankPayment, BankPayment.status == 'needs_review')
             return {'users': count(User), 'available_emails': count(Email, Email.status == 'available'),
-                    'orders': count(Order), 'successful_topups': count(Payment, Payment.status == 'paid'),
-                    'needs_review': count(Payment, Payment.status == 'needs_review'),
+                    'orders': count(Order), 'successful_topups': count(Payment, Payment.status == 'paid') + paid_bank,
+                    'needs_review': count(Payment, Payment.status == 'needs_review') + review_bank,
                     'pending_outbox': count(Outbox, Outbox.status != 'done'),
                     'total_sales_units': session.scalar(select(func.coalesce(func.sum(Order.total_units), 0))),
-                    'total_topup_units': session.scalar(select(func.coalesce(func.sum(Payment.amount_units), 0)).where(Payment.status == 'paid')),
+                    'total_topup_units': session.scalar(select(func.coalesce(func.sum(Payment.amount_units), 0)).where(Payment.status == 'paid')) +
+                                         session.scalar(select(func.coalesce(func.sum(BankTopup.credited_units), 0)).where(BankTopup.status == 'paid')),
                     'price_units': self._price(session)}
 
     def _price(self, session, lock=False, *, shared_lock=False):
@@ -288,7 +299,7 @@ class AppService:
                                  .where(OrderItem.order_id == order.id).order_by(OrderItem.id)).all()
         return {**dto(order), 'emails': list(emails)}
 
-    def purchase(self, user_id, quantity, request_key, expected_price_units=None):
+    def purchase(self, user_id, quantity, request_key, expected_price_units=None, include_emails=True):
         globals()['request_key'](request_key)
         if type(quantity) is not int or not 1 <= quantity <= self.max_order_quantity:
             raise DomainError('Invalid order quantity')
@@ -297,7 +308,7 @@ class AppService:
             user = self._user(session, user_id, True)
             previous = session.scalar(select(Order).where(Order.request_key == key))
             if previous:
-                return self._order(session, previous)
+                return (self._order(session, previous) if include_emails else dto(previous))
             price = self._price(session, shared_lock=True)
             if expected_price_units is not None and expected_price_units != price:
                 raise DomainError('Price changed; please confirm the new price')
@@ -319,7 +330,7 @@ class AppService:
                 session.add(OrderItem(order_id=order_id, email_id=email.id))
             self._enqueue(session, 'telegram_order', {'order_id': order_id, 'user_id': user_id}, 'telegram_order:' + order_id)
             session.flush()
-            return self._order(session, order)
+            return (self._order(session, order) if include_emails else dto(order))
 
     def list_orders(self):
         with self.factory() as session:
@@ -411,7 +422,7 @@ class AppService:
             self._user(session, user_id)
             return {'orders': [dto(row) for row in session.scalars(select(Order).where(Order.user_id == user_id).order_by(Order.created_at.desc()))],
                     'ledger': [dto(row) for row in session.scalars(select(Ledger).where(Ledger.user_id == user_id).order_by(Ledger.id.desc()))],
-                    'topups': [dto(row) for row in session.scalars(select(Topup).where(Topup.user_id == user_id).order_by(Topup.created_at.desc()))]}
+                    'topups': self._topup_rows(session, user_id)}
 
     def request_topup(self, user_id, base_units):
         money(base_units, True)
@@ -459,7 +470,30 @@ class AppService:
 
     def list_topups(self):
         with self.factory() as session:
-            return [dto(row) for row in session.scalars(select(Topup).order_by(Topup.created_at.desc()))]
+            return self._topup_rows(session)
+
+    @staticmethod
+    def _topup_rows(session, user_id=None):
+        bank_query = select(BankTopup).order_by(BankTopup.created_at.desc())
+        binance_query = select(Topup).order_by(Topup.created_at.desc())
+        if user_id is not None:
+            bank_query = bank_query.where(BankTopup.user_id == user_id)
+            binance_query = binance_query.where(Topup.user_id == user_id)
+        rows = []
+        for row in session.scalars(binance_query):
+            rows.append({'id': row.id, 'user_id': row.user_id, 'provider': 'Binance',
+                         'base_units': row.base_units, 'expected_units': row.expected_units,
+                         'base_satang': None, 'expected_satang': None, 'credited_units': None,
+                         'status': row.status, 'created_at': aware(row.created_at).isoformat(),
+                         'expires_at': aware(row.expires_at).isoformat()})
+        for row in session.scalars(bank_query):
+            rows.append({'id': row.id, 'user_id': row.user_id, 'provider': 'ธนาคาร',
+                         'base_units': None, 'expected_units': None,
+                         'base_satang': row.base_satang, 'expected_satang': row.expected_satang,
+                         'credited_units': row.credited_units, 'status': row.status,
+                         'created_at': aware(row.created_at).isoformat(),
+                         'expires_at': aware(row.expires_at).isoformat()})
+        return sorted(rows, key=lambda item: item['created_at'], reverse=True)
 
     def expire_topups(self, now=None):
         now = aware(now or utcnow())
@@ -467,6 +501,106 @@ class AppService:
             result = session.execute(update(Topup).where(
                 Topup.status == 'pending', Topup.expires_at <= now).values(status='expired'))
             return result.rowcount
+
+    def create_bank_topup(self, user_id, base_satang):
+        if type(base_satang) is not int or not 15_000 <= base_satang <= 1_000_000:
+            raise DomainError('Bank top-up must be at least 150 THB and at most 10000 THB')
+        now = utcnow()
+        with self.factory.begin() as session:
+            self._user(session, user_id, True)
+            pending = session.scalar(select(BankTopup).where(
+                BankTopup.user_id == user_id, BankTopup.status == 'pending').order_by(
+                    BankTopup.created_at.desc()).with_for_update())
+            if pending and aware(pending.expires_at) > now:
+                return dto(pending)
+            if pending:
+                pending.status = 'failed'
+            latest = session.scalar(select(BankTopup).where(BankTopup.user_id == user_id)
+                                    .order_by(BankTopup.created_at.desc()).limit(1))
+            if latest and (now - aware(latest.created_at)).total_seconds() < self.topup_cooldown_seconds:
+                raise DomainError('Please wait before creating another bank top-up request')
+            recent = session.scalar(select(func.count()).select_from(BankTopup).where(
+                BankTopup.user_id == user_id, BankTopup.created_at > now - timedelta(hours=24)))
+            if recent >= self.topup_daily_limit:
+                raise DomainError('Bank top-up request limit reached; try again after 24 hours')
+            choices = list(range(1, 100))
+            while choices:
+                suffix = choices.pop(secrets.randbelow(len(choices)))
+                expected = base_satang + suffix
+                topup_id = str(uuid4())
+                if not insert_once(session, BankTopup, {
+                    'id': topup_id, 'user_id': user_id, 'base_satang': base_satang,
+                    'expected_satang': expected, 'credited_units': bank_satang_to_units(expected),
+                    'status': 'pending', 'created_at': now,
+                    'expires_at': now + timedelta(minutes=15)}, 'expected_satang'):
+                    continue
+                row = session.get(BankTopup, topup_id)
+                return dto(row)
+            raise DomainError('No unique bank transfer amounts available; choose another amount')
+
+    def cancel_bank_topup(self, user_id, topup_id):
+        with self.factory.begin() as session:
+            self._user(session, user_id, True)
+            row = session.scalar(select(BankTopup).where(
+                BankTopup.id == topup_id, BankTopup.user_id == user_id).with_for_update())
+            if row is None:
+                raise DomainError('Bank top-up not found')
+            if row.status == 'pending':
+                row.status = 'cancelled'
+            return dto(row)
+
+    def get_bank_topup(self, user_id, topup_id):
+        with self.factory() as session:
+            row = session.get(BankTopup, topup_id)
+            if row is None or row.user_id != user_id:
+                raise DomainError('Bank top-up not found')
+            return dto(row)
+
+    def expire_bank_topups(self, now=None):
+        now = aware(now or utcnow())
+        with self.factory.begin() as session:
+            result = session.execute(update(BankTopup).where(
+                BankTopup.status == 'pending', BankTopup.expires_at <= now).values(status='failed'))
+            return result.rowcount
+
+    def complete_bank_topup(self, user_id, topup_id, trans_ref, amount_satang, occurred_at):
+        positive_id(user_id)
+        if not isinstance(trans_ref, str) or not trans_ref.strip() or len(trans_ref) > 256:
+            raise DomainError('Invalid bank transaction reference')
+        if type(amount_satang) is not int or amount_satang <= 0:
+            raise DomainError('Invalid bank transfer amount')
+        if not isinstance(occurred_at, datetime) or occurred_at.tzinfo is None:
+            raise DomainError('Bank transaction time must include timezone')
+        occurred_at = aware(occurred_at)
+        with self.factory.begin() as session:
+            topup = session.scalar(select(BankTopup).where(
+                BankTopup.id == topup_id, BankTopup.user_id == user_id).with_for_update())
+            if topup is None:
+                raise DomainError('Bank top-up not found')
+            previous = session.get(BankPayment, trans_ref)
+            if previous:
+                if previous.topup_id != topup_id:
+                    raise DomainError('This transaction reference was already used')
+                return {'status': previous.status, 'topup_id': topup_id}
+            timely = aware(topup.created_at) <= occurred_at <= aware(topup.expires_at)
+            valid = (amount_satang == topup.expected_satang and timely
+                     and topup.status in ('pending', 'failed'))
+            payment = BankPayment(trans_ref=trans_ref, topup_id=topup_id,
+                                  amount_satang=amount_satang, occurred_at=occurred_at,
+                                  status='needs_review')
+            session.add(payment)
+            session.flush()
+            if not valid:
+                return {'status': 'needs_review', 'topup_id': topup_id}
+            user = self._user(session, user_id, True)
+            self._ledger(session, user, topup.credited_units, 'bank-payment:' + trans_ref,
+                         'Bank transfer top-up')
+            topup.status = payment.status = 'paid'
+            payload = {'topup_id': topup.id, 'user_id': user.id, 'user_name': user.name,
+                       'amount_units': topup.credited_units, 'balance_units': user.balance_units}
+            self._enqueue(session, 'telegram_topup', payload, 'telegram_bank_topup:' + topup.id)
+            self._enqueue(session, 'discord_topup', payload, 'discord_bank_topup:' + topup.id)
+            return {'status': 'paid', 'topup_id': topup.id}
 
     def list_payments(self):
         with self.factory() as session:

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - 2026-10-21
 
+### Bank transfer top-ups
+- Added a bounded SlipOK client and private-chat bank transfer flow that displays configured recipient details, randomized satang amount, and expected credit.
+- Added a separate PostgreSQL bank top-up/payment ledger path; it checks the exact amount, transaction timestamp, and unique SlipOK transaction reference before atomically crediting the wallet.
+- Enforced the 150 THB minimum, 33.50 THB per credit conversion, 15-minute payment window, image size/type limits, and no-credit behavior for unverified/ambiguous slips.
+- Added bank payments to admin top-up history and successful top-up dashboard totals; preserved the existing Binance flow.
+- Added environment configuration and setup instructions; recipient account details remain only in ignored local/server `.env` files.
+- Live bank payments remain disabled until SlipOK API key and branch ID are configured on the VPS and verified with the matching recipient account.
+
 ### Admin web and notifications
 - Suppressed Discord purchase and refund notifications for owner/admin Telegram IDs while retaining normal order delivery and status updates.
 - Displayed admin timestamps in Thailand time, translated audit actions/details and record statuses, and formatted credit amounts for readability.
@@ -15,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Telegram
 - Added the Telegram display name beside the user ID in the `/start` and `/menu` home message.
+- Reduced purchase-path latency by allowing Telegram to skip loading email bodies during the purchase transaction; the durable worker still loads and delivers them normally.
 
 ### Admin web
 - Formatted fixed-point unit values in admin tables as readable credit or USDT amounts without changing stored database values.

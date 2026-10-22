@@ -1,4 +1,4 @@
-from datetime import UTC
+from datetime import UTC, datetime
 
 import pytest
 
@@ -26,6 +26,20 @@ def test_purchase_atomic_and_duplicate(service):
     with pytest.raises(DomainError):
         service.purchase(7, 2, 'other')
     assert service.get_user(7)['balance_units'] == 40_000_000
+
+
+def test_purchase_can_skip_email_hydration_for_outbox_only_callers(service, monkeypatch):
+    service.ensure_user(7, 'Team')
+    service.adjust_credit(1, 7, delta_units=100_000_000, reason='seed', request_key='credit')
+    service.import_emails(1, 'a@example.org')
+    with monkeypatch.context() as purchase_context:
+        purchase_context.setattr(service, '_order', lambda *_: (_ for _ in ()).throw(
+            AssertionError('purchase should not fetch email bodies for this caller')))
+        order = service.purchase(7, 1, 'fast-path', include_emails=False)
+
+    assert order['id']
+    assert 'emails' not in order
+    assert service.get_order(7, order['id'])['emails'] == ['a@example.org']
 
 def test_purchase_waits_for_final_discord_notification_and_suppresses_legacy_pending(service):
     service.ensure_user(7, 'Team Member')
@@ -118,6 +132,88 @@ def test_topup_once_and_never_reuse(service):
     assert service.get_user(7)['balance_units'] == topup['expected_units']
     next_topup = service.request_topup(7, 100_000_000)
     assert next_topup['expected_units'] != topup['expected_units']
+
+def test_bank_topup_converts_randomized_satang_and_credits_once(service):
+    from datetime import timedelta
+
+    from team_mail_bot.core import bank_satang_to_units
+
+    service.ensure_user(7)
+    topup = service.create_bank_topup(7, 15_000)
+    assert 15_001 <= topup['expected_satang'] <= 15_099
+    assert topup['credited_units'] == bank_satang_to_units(topup['expected_satang'])
+    occurred_at = datetime.fromisoformat(topup['created_at']) + timedelta(minutes=1)
+    result = service.complete_bank_topup(7, topup['id'], 'SCB-TX-1',
+                                         topup['expected_satang'], occurred_at)
+    assert result['status'] == 'paid'
+    assert service.complete_bank_topup(7, topup['id'], 'SCB-TX-1',
+                                       topup['expected_satang'], occurred_at)['status'] == 'paid'
+    assert service.get_user(7)['balance_units'] == topup['credited_units']
+
+def test_bank_topup_rejects_late_and_wrong_amount_without_credit(service):
+    from datetime import timedelta
+
+    service.ensure_user(7)
+    topup = service.create_bank_topup(7, 15_000)
+    expiry = datetime.fromisoformat(topup['expires_at'])
+    late = service.complete_bank_topup(7, topup['id'], 'SCB-LATE',
+                                       topup['expected_satang'], expiry + timedelta(seconds=1))
+    assert late['status'] == 'needs_review'
+    assert service.get_user(7)['balance_units'] == 0
+    wrong = service.complete_bank_topup(7, topup['id'], 'SCB-WRONG',
+                                        topup['expected_satang'] + 1,
+                                        datetime.fromisoformat(topup['created_at']) + timedelta(seconds=10))
+    assert wrong['status'] == 'needs_review'
+    assert service.get_user(7)['balance_units'] == 0
+
+def test_bank_topup_minimum_unique_amount_and_expired_timely_transfer(service):
+    from datetime import timedelta
+
+    service.ensure_user(7)
+    with pytest.raises(DomainError):
+        service.create_bank_topup(7, 14_999)
+    first = service.create_bank_topup(7, 15_000)
+    service.expire_bank_topups(now=datetime.fromisoformat(first['expires_at']) + timedelta(seconds=1))
+    paid_time = datetime.fromisoformat(first['created_at']) + timedelta(minutes=14)
+    second = service.create_bank_topup(7, 15_000)
+    assert second['expected_satang'] != first['expected_satang']
+    assert service.complete_bank_topup(7, first['id'], 'SCB-TIMELY-LATE-UPLOAD',
+                                       first['expected_satang'], paid_time)['status'] == 'paid'
+
+def test_cancelled_bank_topup_and_duplicate_reference_never_credit_twice(service):
+    from datetime import timedelta
+
+    service.ensure_user(7)
+    cancelled = service.create_bank_topup(7, 15_000)
+    service.cancel_bank_topup(7, cancelled['id'])
+    sent_at = datetime.fromisoformat(cancelled['created_at']) + timedelta(seconds=3)
+    assert service.complete_bank_topup(7, cancelled['id'], 'SCB-CANCELLED',
+        cancelled['expected_satang'], sent_at)['status'] == 'needs_review'
+    assert service.get_user(7)['balance_units'] == 0
+
+    active = service.create_bank_topup(7, 15_000)
+    assert service.complete_bank_topup(7, active['id'], 'SCB-UNIQUE',
+        active['expected_satang'], datetime.fromisoformat(active['created_at']))['status'] == 'paid'
+    service.ensure_user(8)
+    second = service.create_bank_topup(8, 15_000)
+    with pytest.raises(DomainError):
+        service.complete_bank_topup(8, second['id'], 'SCB-UNIQUE',
+            second['expected_satang'], datetime.fromisoformat(second['created_at']))
+    assert service.get_user(8)['balance_units'] == 0
+
+
+def test_bank_topup_is_in_admin_history_and_successful_summary(service):
+    service.ensure_user(7)
+    topup = service.create_bank_topup(7, 15_000)
+    service.complete_bank_topup(7, topup['id'], 'SCB-SUMMARY', topup['expected_satang'],
+        datetime.fromisoformat(topup['created_at']))
+
+    row = service.list_topups()[0]
+    assert row['provider'] == 'ธนาคาร'
+    assert row['expected_satang'] == topup['expected_satang']
+    assert row['credited_units'] == topup['credited_units']
+    assert service.summary()['successful_topups'] == 1
+    assert service.summary()['total_topup_units'] == topup['credited_units']
 
 def test_parser_and_deleted_dedup(service):
     preview = service.preview_import('1.\nhello@sub.example.org|secret@bad.org\ninvalid\n2. other@example.net')

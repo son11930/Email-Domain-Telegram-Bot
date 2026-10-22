@@ -83,6 +83,29 @@ class Payment(Base):
     status: Mapped[str] = mapped_column(String(30))
     topup_id: Mapped[str | None] = mapped_column(ForeignKey('topup_requests.id'), nullable=True)
 
+class BankTopup(Base):
+    __tablename__ = 'bank_topup_requests'
+    __table_args__ = (CheckConstraint('base_satang >= 15000'),
+                      CheckConstraint('expected_satang > base_satang'),
+                      CheckConstraint('credited_units > 0'))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id'), index=True)
+    base_satang: Mapped[int] = mapped_column(BigInteger)
+    expected_satang: Mapped[int] = mapped_column(BigInteger, unique=True)
+    credited_units: Mapped[int] = mapped_column(BigInteger)
+    status: Mapped[str] = mapped_column(String(24), default='pending', index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+class BankPayment(Base):
+    __tablename__ = 'bank_payment_events'
+    __table_args__ = (CheckConstraint('amount_satang > 0'),)
+    trans_ref: Mapped[str] = mapped_column(String(256), primary_key=True)
+    topup_id: Mapped[str] = mapped_column(ForeignKey('bank_topup_requests.id'), index=True)
+    amount_satang: Mapped[int] = mapped_column(BigInteger)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(30))
+
 class Outbox(Base):
     __tablename__ = 'delivery_outbox'
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
