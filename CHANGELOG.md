@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - 2026-10-21
 
+### Security
+- Limited SlipOK verification to five reserved attempts per Telegram ID per Thailand calendar day using persistent database slots, and rejected previously seen image SHA-256 hashes before provider submission.
+- Validated image signature and extension locally before reserving quota so invalid files do not consume the daily allowance.
+
 ### Telegram
 - Rendered the Telegram user ID as a copyable code field in the home message.
 

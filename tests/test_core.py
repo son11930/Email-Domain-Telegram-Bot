@@ -437,6 +437,38 @@ def test_persistent_topup_issuance_limits(service, monkeypatch):
     assert limited.request_topup(7, 100_000_000)['id'] != topup['id']
 
 
+def test_slip_verification_is_limited_to_five_attempts_per_bangkok_day(service):
+    from datetime import datetime
+
+    service.ensure_user(7, 'User')
+    now = datetime.fromisoformat('2026-10-22T17:00:00+00:00')  # midnight in Bangkok
+    for slot in range(1, 6):
+        assert service.reserve_slip_verification(7, f'{slot:064x}', now) == slot
+    with pytest.raises(DomainError, match='5 ครั้งต่อวันตามเวลาไทย'):
+        service.reserve_slip_verification(7, f'{6:064x}', now)
+
+    # The cap resets at midnight Thailand time, not midnight UTC.
+    next_bangkok_day = datetime.fromisoformat('2026-10-23T17:00:00+00:00')
+    assert service.reserve_slip_verification(7, f'{6:064x}', next_bangkok_day) == 1
+
+
+def test_slip_verification_rejects_reused_image_hash_globally(service):
+    service.ensure_user(7, 'User')
+    service.ensure_user(8, 'Another user')
+    digest = 'a' * 64
+    assert service.reserve_slip_verification(7, digest) == 1
+    with pytest.raises(DomainError, match='เคยส่งตรวจแล้ว'):
+        service.reserve_slip_verification(8, digest)
+    assert service.reserve_slip_verification(8, 'b' * 64) == 1
+
+
+@pytest.mark.parametrize('digest', ['', 'a' * 63, 'G' * 64, 'a' * 65])
+def test_slip_verification_rejects_invalid_sha256(service, digest):
+    service.ensure_user(7, 'User')
+    with pytest.raises(DomainError, match='Invalid image hash'):
+        service.reserve_slip_verification(7, digest)
+
+
 def test_outbox_stale_lease_cannot_regress_done(service, monkeypatch):
     from datetime import timedelta
 

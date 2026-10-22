@@ -129,6 +129,13 @@ def test_rejects_invalid_expected_amount_before_http_request():
             client.verify_slip(PNG, "slip.png", amount)
 
 
+def test_validate_image_checks_locally_without_calling_slipok():
+    client = make_client(lambda request: pytest.fail("validation must be local"))
+    assert client.validate_image(PNG, 'slip.png') == 'image/png'
+    with pytest.raises(ValueError, match='type'):
+        client.validate_image(b'not an image', 'slip.png')
+
+
 def test_timeout_is_safe_and_does_not_expose_credentials_or_image():
     def handler(request):
         raise httpx.ReadTimeout("test-api-key and image bytes", request=request)

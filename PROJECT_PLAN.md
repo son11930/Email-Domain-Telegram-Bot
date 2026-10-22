@@ -203,3 +203,13 @@
 - ผลตรวจเบื้องต้น: worker รอสูงสุด 2 วินาทีก่อนพบ outbox ใหม่ และ `purchase()` อ่านเนื้อหาเมลที่ Telegram ไม่ได้ใช้ก่อน worker อ่านซ้ำ; พิจารณาแล้วคงรอบตรวจคิว 2 วินาทีเพื่อลดคำขอ idle ไปยัง Supabase และให้ Telegram ข้ามเฉพาะการอ่านเนื้อหาเมลซ้ำ โดยคงการส่งแบบ outbox ทีละงาน
 - ผลตรวจอัตโนมัติ: 201 tests ผ่าน, 7 PostgreSQL tests ข้ามเพราะไม่มี `TEST_DATABASE_URL`, Ruff และ compileall ผ่าน; ไม่มี timing measurement จาก VPS จริง จึงไม่ยืนยันตัวเลขเวลารวมที่ลดลง
 - ข้อจำกัด: ยังไม่มี timing จาก VPS จริง; SlipOK branch ต้องผูกกับบัญชีผู้รับเดียวกับที่ตั้งไว้ใน `.env` ก่อนเปิดเติมเงินธนาคาร
+
+## แผนงาน: จำกัดการตรวจสลิป SlipOK และป้องกันรูปซ้ำ
+
+- สถานะ: implementation และ automated verification เสร็จ (2026-10-23); ยังไม่ deploy
+- เป้าหมาย: จำกัดการเรียกตรวจ SlipOK ไม่เกิน 5 ครั้งต่อ Telegram ID ต่อวันปฏิทินไทย และไม่ส่งไฟล์ภาพที่มี SHA-256 ซ้ำเข้า SlipOK อีก
+- ขอบเขต: บันทึกโควตา/แฮชในฐานข้อมูล เพื่อคงอยู่หลัง restart และทำงานได้หลาย process; ตรวจรูปแบบ/ขนาดภาพในเครื่องก่อนนับโควตา; นับความพยายามก่อนเรียก provider แบบ conservative เพื่อไม่ให้ retry หรือ crash เปิดช่องเกินโควตา
+- ขั้นตอน/ผล: เพิ่ม tests สำหรับ cap 5, วันไทย/เปลี่ยนวัน, hash ซ้ำ, hash ผิดรูปแบบ, concurrency บน PostgreSQL และ local image validation → เพิ่มตารางบันทึก attempt พร้อม unique constraints และ atomic slot reservation; `team-mail init-db` สร้างตารางใหม่และตั้ง RLS/สิทธิ์ให้อัตโนมัติ → เชื่อม flow อัปโหลดภาพเข้ากับการตรวจ local validation, hash และ reserve ก่อนเรียก API → เพิ่มข้อความภาษาไทยเมื่อรูปซ้ำหรือครบโควตา → full suite และ lint ผ่าน
+- ความเสี่ยง/แนวทาง: นับรูปที่จองโควตาแล้วแม้ process จะหยุดก่อนส่งจริง เป็นการนับเกินได้เล็กน้อยแต่ไม่เปิดช่องเรียกเกิน 5 ครั้ง; hash ตรงกันเฉพาะ bytes เดิม จึงยังมี SlipOK `log: true` และ transaction reference ในฐานข้อมูลเป็นการป้องกันซ้ำอีกชั้น
+- เกณฑ์สำเร็จ: user หนึ่งคนมีได้สูงสุด 5 attempt ต่อวันไทยแม้เรียกพร้อมกัน; เริ่มนับใหม่เที่ยงคืนไทย; ไฟล์ hash เดิมไม่เรียก SlipOK ซ้ำแม้คนละผู้ใช้/คนละวัน; Binance flow ไม่เปลี่ยน
+- ข้อจำกัดก่อน deploy: tests ผ่าน 210 รายการและข้าม 9 PostgreSQL integration tests เพราะไม่มี `TEST_DATABASE_URL`; manager update เรียก `team-mail init-db` เพื่อสร้างตารางใหม่ก่อน restart; ยังไม่ได้ deploy

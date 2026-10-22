@@ -3,10 +3,12 @@ import re
 import secrets
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import String, cast, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import IntegrityError
 
 from .models import (
     AmountLease,
@@ -21,6 +23,7 @@ from .models import (
     Outbox,
     Payment,
     Setting,
+    SlipVerificationAttempt,
     Topup,
     User,
 )
@@ -562,6 +565,33 @@ class AppService:
             result = session.execute(update(BankTopup).where(
                 BankTopup.status == 'pending', BankTopup.expires_at <= now).values(status='failed'))
             return result.rowcount
+
+    def reserve_slip_verification(self, user_id, image_sha256, now=None):
+        positive_id(user_id)
+        if not isinstance(image_sha256, str) or not re.fullmatch(r'[0-9a-f]{64}', image_sha256):
+            raise DomainError('Invalid image hash')
+        now = aware(now or utcnow())
+        bangkok_date = now.astimezone(ZoneInfo('Asia/Bangkok')).date()
+        with self.factory.begin() as session:
+            self._user(session, user_id, True)
+            duplicate = session.scalar(select(SlipVerificationAttempt).where(
+                SlipVerificationAttempt.image_sha256 == image_sha256))
+            if duplicate:
+                raise DomainError('สลิปรูปนี้เคยส่งตรวจแล้ว ระบบจะไม่ส่งตรวจซ้ำ')
+            for slot in range(1, 6):
+                try:
+                    with session.begin_nested():
+                        session.add(SlipVerificationAttempt(
+                            user_id=user_id, bangkok_date=bangkok_date, slot=slot,
+                            image_sha256=image_sha256, created_at=now))
+                        session.flush()
+                    return slot
+                except IntegrityError:
+                    duplicate = session.scalar(select(SlipVerificationAttempt).where(
+                        SlipVerificationAttempt.image_sha256 == image_sha256))
+                    if duplicate:
+                        raise DomainError('สลิปรูปนี้เคยส่งตรวจแล้ว ระบบจะไม่ส่งตรวจซ้ำ') from None
+            raise DomainError('ครบโควตาตรวจสลิปแล้ว (สูงสุด 5 ครั้งต่อวันตามเวลาไทย)')
 
     def complete_bank_topup(self, user_id, topup_id, trans_ref, amount_satang, occurred_at):
         positive_id(user_id)

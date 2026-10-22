@@ -40,8 +40,13 @@ class SlipOKClient:
         if self._owns_client:
             self._client.close()
 
+    @staticmethod
+    def validate_image(image: bytes, filename: str) -> str:
+        """Validate size, image signature, and extension without contacting SlipOK."""
+        return _validate_image(image, filename)
+
     def verify_slip(self, image: bytes, filename: str, expected_amount: Decimal) -> dict:
-        mime_type = _validate_image(image, filename)
+        mime_type = self.validate_image(image, filename)
         amount = _amount(expected_amount)
         url = f"{API_ORIGIN}/api/line/apikey/{quote(self._branch_id, safe='')}"
         files = {"files": (filename, image, mime_type)}

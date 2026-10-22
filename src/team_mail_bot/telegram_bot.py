@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import re
 import time
@@ -349,6 +350,8 @@ class TelegramController:
             image = destination.getvalue()
             if len(image) > MAX_IMAGE_BYTES:
                 return await self.say(message, 'ไฟล์ภาพต้องมีขนาดไม่เกิน 500 KB')
+            self.slipok.validate_image(image, filename)
+            await self.call('reserve_slip_verification', user_id, hashlib.sha256(image).hexdigest())
             verified = await asyncio.to_thread(self.slipok.verify_slip, image, filename,
                                                Decimal(request['expected_satang']) / 100)
             satang = int(verified['amount'] * 100)

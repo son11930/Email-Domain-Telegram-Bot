@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -235,10 +236,12 @@ def test_bank_slip_verification_credits_only_slipok_confirmed_payment():
     svc, ui = service(), MemoryState('bank_slip', {'bank_topup_id': 'bank-1'})
     svc.get_bank_topup = Mock(return_value={'id': 'bank-1', 'status': 'pending',
                                            'expected_satang': 15_037})
+    svc.reserve_slip_verification = Mock(return_value=1)
     svc.complete_bank_topup = Mock(return_value={'status': 'paid'})
     verifier = Mock(return_value={'trans_ref': 'unique-ref', 'amount': Decimal('150.37'),
                                   'occurred_at': datetime.now(UTC)})
-    controller = TelegramController(svc, settings(), slipok=SimpleNamespace(verify_slip=verifier))
+    controller = TelegramController(svc, settings(), slipok=SimpleNamespace(
+        validate_image=Mock(return_value='image/jpeg'), verify_slip=verifier))
     msg = message(text='')
     msg.document = SimpleNamespace(file_name='receipt.jpg', file_id='file-1', file_size=20)
 
@@ -247,15 +250,73 @@ def test_bank_slip_verification_credits_only_slipok_confirmed_payment():
             return SimpleNamespace(file_path='receipt/path')
 
         async def download_file(self, _path, destination):
-            destination.write(b'12345678901234567890')
+            destination.write(b'\xff\xd8\xff' + b'x' * 17)
 
     msg.bot = FakeBot()
     run(controller.message(msg, ui))
 
     verifier.assert_called_once()
+    svc.reserve_slip_verification.assert_called_once_with(
+        1, hashlib.sha256(b'\xff\xd8\xff' + b'x' * 17).hexdigest())
     svc.complete_bank_topup.assert_called_once_with(1, 'bank-1', 'unique-ref', 15_037,
                                                      verifier.return_value['occurred_at'])
     assert 'ตรวจสอบสลิปสำเร็จ' in msg.answer.await_args.args[0]
+
+
+def test_duplicate_or_over_limit_slip_is_not_sent_to_provider():
+    from team_mail_bot.core import DomainError
+
+    svc, ui = service(), MemoryState('bank_slip', {'bank_topup_id': 'bank-1'})
+    svc.get_bank_topup = Mock(return_value={'id': 'bank-1', 'status': 'pending',
+                                           'expected_satang': 15_037})
+    svc.reserve_slip_verification = Mock(side_effect=DomainError(
+        'สลิปรูปนี้เคยส่งตรวจแล้ว ระบบจะไม่ส่งตรวจซ้ำ'))
+    verifier = Mock()
+    controller = TelegramController(svc, settings(), slipok=SimpleNamespace(
+        validate_image=Mock(return_value='image/jpeg'), verify_slip=verifier))
+    msg = message(text='')
+    msg.document = SimpleNamespace(file_name='receipt.jpg', file_id='file-1', file_size=20)
+
+    class FakeBot:
+        async def get_file(self, _file_id):
+            return SimpleNamespace(file_path='receipt/path')
+
+        async def download_file(self, _path, destination):
+            destination.write(b'\xff\xd8\xff' + b'x' * 17)
+
+    msg.bot = FakeBot()
+    run(controller.message(msg, ui))
+
+    svc.reserve_slip_verification.assert_called_once()
+    verifier.assert_not_called()
+    assert 'เคยส่งตรวจแล้ว' in msg.answer.await_args.args[0]
+
+
+def test_invalid_local_image_does_not_reserve_quota_or_call_provider():
+    svc, ui = service(), MemoryState('bank_slip', {'bank_topup_id': 'bank-1'})
+    svc.get_bank_topup = Mock(return_value={'id': 'bank-1', 'status': 'pending',
+                                           'expected_satang': 15_037})
+    svc.reserve_slip_verification = Mock()
+    validator = Mock(side_effect=ValueError('Slip image type is not supported'))
+    verifier = Mock()
+    controller = TelegramController(svc, settings(), slipok=SimpleNamespace(
+        validate_image=validator, verify_slip=verifier))
+    msg = message(text='')
+    msg.document = SimpleNamespace(file_name='receipt.jpg', file_id='file-1', file_size=20)
+
+    class FakeBot:
+        async def get_file(self, _file_id):
+            return SimpleNamespace(file_path='receipt/path')
+
+        async def download_file(self, _path, destination):
+            destination.write(b'x' * 20)
+
+    msg.bot = FakeBot()
+    run(controller.message(msg, ui))
+
+    validator.assert_called_once()
+    svc.reserve_slip_verification.assert_not_called()
+    verifier.assert_not_called()
 
 
 def test_cancel_command_cancels_pending_bank_topup():

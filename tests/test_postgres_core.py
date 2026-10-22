@@ -90,6 +90,37 @@ def test_postgres_duplicate_bank_slip_race_credits_once(pg_service):
     assert service.get_user(7)['balance_units'] == topup['credited_units']
     assert len(service.history(7)['ledger']) == 1
 
+
+def test_postgres_slip_verification_quota_is_atomic(pg_service):
+    service = pg_service
+    service.ensure_user(7)
+
+    def reserve(index):
+        try:
+            return service.reserve_slip_verification(7, f'{index:064x}')
+        except DomainError:
+            return None
+
+    with ThreadPoolExecutor(8) as executor:
+        results = list(executor.map(reserve, range(1, 9)))
+    assert sorted(slot for slot in results if slot is not None) == [1, 2, 3, 4, 5]
+    assert results.count(None) == 3
+
+
+def test_postgres_duplicate_image_race_is_reserved_once(pg_service):
+    service = pg_service
+    service.ensure_user(7)
+
+    def reserve(_):
+        try:
+            return service.reserve_slip_verification(7, 'a' * 64)
+        except DomainError:
+            return None
+
+    with ThreadPoolExecutor(2) as executor:
+        results = list(executor.map(reserve, range(2)))
+    assert sum(slot is not None for slot in results) == 1
+
 def test_postgres_distinct_payments_cannot_double_credit_reservation(pg_service, monkeypatch):
     from datetime import datetime
     from threading import Barrier

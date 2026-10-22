@@ -1,7 +1,16 @@
 """Database schema. All monetary amounts use exact integer units (1e8/USDT)."""
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
-from sqlalchemy import JSON, BigInteger, CheckConstraint, DateTime, ForeignKey, Integer, String
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -105,6 +114,15 @@ class BankPayment(Base):
     amount_satang: Mapped[int] = mapped_column(BigInteger)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(30))
+
+class SlipVerificationAttempt(Base):
+    __tablename__ = 'slip_verification_attempts'
+    __table_args__ = (CheckConstraint('slot BETWEEN 1 AND 5'),)
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id'), primary_key=True)
+    bangkok_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    slot: Mapped[int] = mapped_column(Integer, primary_key=True)
+    image_sha256: Mapped[str] = mapped_column(String(64), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 class Outbox(Base):
     __tablename__ = 'delivery_outbox'
