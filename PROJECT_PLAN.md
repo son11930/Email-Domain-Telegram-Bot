@@ -2,7 +2,7 @@
 
 ## งานเพิ่มเติม: ปรับอัตราเติมเงินธนาคารและแก้ผ่านเว็บ
 
-- สถานะ: implementation และ review เสร็จ; 224 tests ผ่าน, 9 PostgreSQL integration tests ข้ามเพราะไม่มี `TEST_DATABASE_URL`; Ruff ผ่าน; ยังไม่ได้ deploy
+- สถานะ: deploy ผ่าน bot-manager; bot/worker/web active และ dashboard HTTP 200; 224 tests ผ่าน, 9 PostgreSQL integration tests ข้ามเพราะไม่มี `TEST_DATABASE_URL`; Ruff ผ่าน
 - เป้าหมาย: เปลี่ยนอัตราเริ่มต้นจาก 33.50 เป็น 34.50 บาทต่อ 1 credit และให้แอดมินแก้เรตได้จากหน้า Settings ของ dashboard
 - วิธีทำ: เก็บเรตเป็นจำนวนสตางค์ใน `settings`, ใช้เรตปัจจุบันตอนสร้างคำขอใหม่ และผ่านขั้นตรวจสอบ/ยืนยันพร้อมบันทึก audit
 - ความเข้ากันได้: คำขอที่สร้างไว้แล้วคงยอดเครดิตที่บันทึกไว้; ไม่ต้องเปลี่ยน schema หรือ migration
