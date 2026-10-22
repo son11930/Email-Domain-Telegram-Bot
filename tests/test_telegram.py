@@ -80,6 +80,7 @@ def test_main_menu_shows_name_with_telegram_id():
 
     assert 'ชื่อ: Team Member' in msg.answer.await_args.args[0]
     assert 'รหัสผู้ใช้: 1' in msg.answer.await_args.args[0]
+    assert 'Nethinat Mail Service' in msg.answer.await_args.args[0]
 
 
 def test_quick_buttons_bind_user_and_nonce():
@@ -216,8 +217,12 @@ def test_bank_topup_shows_account_exact_amount_credit_and_15_minute_window():
     assert svc.create_bank_topup.call_args.args == (1, 15_000)
     shown = amount_msg.answer.await_args.args[0]
     assert 'ธนาคาร: SCB' in shown
-    assert 'Receiver' in shown and '000-000000-0' in shown
-    assert '150.37 บาท' in shown and '4.48865672 credit' in shown
+    assert 'ชื่อบัญชี: Receiver' in shown
+    assert 'เลขบัญชี (แตะค้างเพื่อคัดลอก): <code>000-000000-0</code>' in shown
+    assert 'ยอดที่ต้องโอน (แตะค้างเพื่อคัดลอก): <code>150.37</code> บาท' in shown
+    assert '4.48865672 credit' in shown
+    assert 'SlipOK' not in shown
+    assert amount_msg.answer.await_args.kwargs['parse_mode'] == 'HTML'
     assert ui.name == 'bank_slip'
     assert ui.data['bank_topup_id'] == 'bank-1'
 

@@ -8,6 +8,7 @@ import time
 from collections import OrderedDict
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
+from html import escape
 from io import BytesIO
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -122,7 +123,7 @@ class TelegramController:
         name = user.get('name')
         name = ' '.join(name.split())[:80] if isinstance(name, str) else ''
         await self.say(message,
-                       f'📩 บอทเบิกอีเมลโดเมน\nชื่อ: {name or "ไม่ระบุชื่อ"}\n'
+                       f'📩 Nethinat Mail Service\nชื่อ: {name or "ไม่ระบุชื่อ"}\n'
                        f'รหัสผู้ใช้: {user_id}\n'
                        f'ยอดคงเหลือ: {format_units(user["balance_units"])} credit\n'
                        f'ราคา: {format_units(price)} credit / เมล',
@@ -301,13 +302,18 @@ class TelegramController:
         await state.update_data(bank_topup_id=request['id'])
         amount = Decimal(expected) / 100
         bank_name = f'ธนาคาร: {self.settings.bank_name}\n' if self.settings.bank_name else ''
-        await self.say(message,
-            f'🏦 เติมเงินผ่านบัญชีธนาคาร\n{bank_name}ชื่อบัญชี: {self.settings.bank_account_name}\n'
-            f'เลขบัญชี: {self.settings.bank_account_number}\nยอดที่ต้องโอน: {amount:.2f} บาท\n'
+        text = (
+            f'🏦 เติมเงินผ่านบัญชีธนาคาร\n{escape(bank_name)}'
+            f'ชื่อบัญชี: {escape(self.settings.bank_account_name)}\n'
+            f'เลขบัญชี (แตะค้างเพื่อคัดลอก): <code>{escape(self.settings.bank_account_number)}</code>\n'
+            f'ยอดที่ต้องโอน (แตะค้างเพื่อคัดลอก): <code>{amount:.2f}</code> บาท\n'
             f'ได้รับประมาณ: {format_units(request["credited_units"])} credit\n'
             f'โอนภายใน 15 นาที (ก่อน {expiry}) แล้วส่งรูปสลิปในแชทนี้\n'
-            'ระบบจะเพิ่มเครดิตเมื่อ SlipOK ยืนยันยอด ผู้รับ เวลา และสลิปไม่ซ้ำเท่านั้น',
-            keyboard([('ยกเลิกคำขอ', f'cancelbank:{request["id"]}')], [('เมนูหลัก', 'menu')]))
+            'ระบบจะตรวจสอบยอด ผู้รับ เวลา และรายการสลิปซ้ำก่อนเพิ่มเครดิต'
+        )
+        await message.answer(text, reply_markup=keyboard(
+            [('ยกเลิกคำขอ', f'cancelbank:{request["id"]}')], [('เมนูหลัก', 'menu')]),
+            parse_mode='HTML')
 
     async def verify_bank_slip(self, message, user_id, state):
         data = await state.get_data()

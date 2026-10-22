@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - 2026-10-21
 
+### User experience
+- Rebranded the Telegram home message and admin dashboard as Nethinat Mail Service.
+- Formatted bank account number and transfer amount as Telegram copyable code fields and removed the SlipOK provider name from customer-facing transfer instructions.
+
 ### Telegram bank top-ups
 - Added optional `BANK_NAME` configuration and display it in bank transfer instructions so users can identify the recipient bank before transferring.
 

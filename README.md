@@ -1,6 +1,6 @@
-# Team Mail Bot
+# Nethinat Mail Service
 
-Telegram bot for team-managed domain email inventory with credit-based purchases, Binance Pay top-ups, Discord notifications, and an admin web panel.
+Telegram bot for domain email inventory with credit-based purchases, Binance Pay and bank transfer top-ups, Discord notifications, and an admin web panel.
 
 บอท Telegram แจกอีเมลโดเมนพร้อมเครดิตและเว็บแอดมิน ใช้ PostgreSQL ภายนอกบน Supabase และรัน bot / worker / web บน VPS ด้วย GNU Screen (ไม่ใช้ Docker เป็นขั้นตอนรันหลัก)
 
