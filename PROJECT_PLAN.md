@@ -224,7 +224,7 @@
 
 ## แผนงาน: เพิ่มหน้ารายงานสรุปยอดตามช่วงเวลา
 
-- สถานะ: implementation และ agent reviews เสร็จ; full suite ผ่าน 233 รายการ (9 PostgreSQL integration tests ข้ามเพราะไม่มี `TEST_DATABASE_URL`), coverage 90%, Ruff และ `git diff --check` ผ่าน; รอ push/deploy ผ่าน bot-manager
+- สถานะ: deploy แล้วผ่านเมนู update ของ `bot-manager.bat` เมื่อ 2026-10-24; migration สำเร็จ, bot/worker/web active และหน้า `/reports` ตอบกลับหน้า login ตามสิทธิ์แอดมิน; full suite ผ่าน 233 รายการ (9 PostgreSQL integration tests ข้ามเพราะไม่มี `TEST_DATABASE_URL`), coverage 90%, Ruff และ `git diff --check` ผ่าน
 - เป้าหมาย: เพิ่มหน้าแอดมินสำหรับดูผลงานรายวันและยอดรวมตามช่วงวันที่ เลือกวันนี้, เมื่อวาน, 7 วัน, 30 วัน, ระบุวันเริ่ม/วันสิ้นสุดเอง หรือดู all time ได้
 - แนวทางหน้าเว็บ: เพิ่มลิงก์ “รายงาน” และหน้าอ่านอย่างเดียวที่ `GET /reports`; แสดงการ์ดสรุปช่วงที่เลือกและตารางยอดรายวัน; all time แสดงยอดรวมพร้อมตารางรายวันแบบแบ่งหน้า/จำกัดจำนวนวัน เพื่อไม่ส่งผลลัพธ์จำนวนมากเกินจำเป็น
 - นิยามตัวเลข:
