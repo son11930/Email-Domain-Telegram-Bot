@@ -1,8 +1,9 @@
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
-from team_mail_bot.core import AppService, DomainError
+from team_mail_bot.core import AppService, DomainError, _report_daily_query
 from team_mail_bot.db import create_session_factory, init_db
 from team_mail_bot.models import BankPayment, BankTopup, Ledger, Order, Payment, User
 
@@ -225,6 +226,16 @@ def test_sales_report_all_time_caps_merged_activity_days_without_truncating_tota
     assert len(report['daily']) == 30
     assert report['daily'][0]['date'] == date(2026, 5, 11)
     assert report['daily'][-1]['date'] == date(2026, 6, 9)
+
+
+def test_postgres_daily_report_reuses_timezone_expression_in_group_by():
+    query = _report_daily_query(Order, Order.delivered_at, 'postgresql',
+                                (Order.quantity,), limit=31)
+    compiled = str(query.compile(dialect=postgresql.dialect()))
+
+    assert 'GROUP BY date(timezone(%(timezone_1)s::VARCHAR, orders.delivered_at))' in compiled
+    assert compiled.count('%(timezone_1)s') == 3
+    assert '%(timezone_2)s' not in compiled
 
 def test_topup_once_and_never_reuse(service):
     service.ensure_user(7)

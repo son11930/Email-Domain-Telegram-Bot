@@ -84,6 +84,18 @@ def actor_text(value):
         return value
     raise DomainError('Invalid administrator identity')
 
+def _report_daily_query(model, timestamp, dialect, metrics, *, limit):
+    if dialect == 'postgresql':
+        day_expression = func.date(func.timezone('Asia/Bangkok', timestamp))
+    else:
+        day_expression = func.date(timestamp, '+7 hours')
+    return (select(day_expression.label('report_day'),
+                   *[func.coalesce(func.sum(expression), 0) for expression in metrics])
+            .select_from(model)
+            .group_by(day_expression)
+            .order_by(day_expression.desc())
+            .limit(limit))
+
 class AppService:
     def __init__(self, session_factory, *, price_units=30_000_000, precision=4,
                  topup_ttl_seconds=480, max_order_quantity=1000, topup_daily_limit=3,
@@ -183,24 +195,17 @@ class AppService:
                 clauses.extend((column >= start_utc, column < end_utc))
             return clauses
 
-        def local_day(column, dialect):
-            if dialect == 'postgresql':
-                return func.date(func.timezone('Asia/Bangkok', column))
-            return func.date(column, '+7 hours')
-
         def aggregate(session, model, timestamp, conditions, metrics, *, joined=None):
-            query = select(*[func.coalesce(func.sum(expression), 0) for expression in metrics])
-            grouped_query = select(local_day(timestamp, session.bind.dialect.name),
-                                   *[func.coalesce(func.sum(expression), 0) for expression in metrics])
+            query = select(*[func.coalesce(func.sum(expression), 0) for expression in metrics]).select_from(model)
+            grouped_query = _report_daily_query(
+                model, timestamp, session.bind.dialect.name, metrics,
+                limit=31 if all_time else 367)
             if joined is not None:
-                query = query.select_from(model).join(*joined)
-                grouped_query = grouped_query.select_from(model).join(*joined)
+                query = query.join(*joined)
+                grouped_query = grouped_query.join(*joined)
             clauses = [*conditions, *bounds(timestamp)]
             total_row = session.execute(query.where(*clauses)).one()
-            daily_query = (grouped_query.where(*clauses)
-                           .group_by(local_day(timestamp, session.bind.dialect.name))
-                           .order_by(local_day(timestamp, session.bind.dialect.name).desc())
-                           .limit(31 if all_time else 367))
+            daily_query = grouped_query.where(*clauses)
             rows = session.execute(daily_query).all()
             return tuple(total_row), rows
 

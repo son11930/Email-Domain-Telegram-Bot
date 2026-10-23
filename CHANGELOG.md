@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added an indexed `orders.delivered_at` timestamp, set after successful delivery, with a one-time backfill for legacy delivered orders. Historical refunded orders without delivery evidence remain excluded from net sales.
 - Added a 30-activity-day display cap for all-time reports while retaining full-range totals.
 
+### Fixed
+- Fixed the PostgreSQL daily report query by reusing one Bangkok-day expression across `SELECT`, `GROUP BY`, and `ORDER BY`, preventing a grouping error caused by distinct timezone bind parameters.
+
 ### Security
 - Limited SlipOK verification to five reserved attempts per Telegram ID per Thailand calendar day using persistent database slots, and rejected previously seen image SHA-256 hashes before provider submission.
 - Validated image signature and extension locally before reserving quota so invalid files do not consume the daily allowance.
