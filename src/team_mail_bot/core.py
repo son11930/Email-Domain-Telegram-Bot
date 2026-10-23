@@ -1,11 +1,11 @@
 """Transactional application boundary shared by Telegram, web and workers."""
 import re
 import secrets
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import String, cast, func, or_, select, update
+from sqlalchemy import String, cast, func, literal, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
@@ -153,6 +153,132 @@ class AppService:
                     'total_topup_units': session.scalar(select(func.coalesce(func.sum(Payment.amount_units), 0)).where(Payment.status == 'paid')) +
                                          session.scalar(select(func.coalesce(func.sum(BankTopup.credited_units), 0)).where(BankTopup.status == 'paid')),
                     'price_units': self._price(session), 'bank_rate_satang': self._bank_rate(session)}
+
+    def sales_report(self, start_date=None, end_date=None, *, all_time=False):
+        if type(all_time) is not bool:
+            raise DomainError('Invalid report range')
+        if all_time:
+            if start_date is not None or end_date is not None:
+                raise DomainError('All-time report cannot include date bounds')
+            start_utc = end_utc = None
+        else:
+            if (not isinstance(start_date, date) or isinstance(start_date, datetime)
+                    or not isinstance(end_date, date) or isinstance(end_date, datetime)
+                    or start_date > end_date or (end_date - start_date).days >= 366):
+                raise DomainError('Invalid report date range')
+            bangkok = ZoneInfo('Asia/Bangkok')
+            start_utc = datetime.combine(start_date, time.min, bangkok).astimezone(UTC)
+            end_utc = datetime.combine(end_date + timedelta(days=1), time.min, bangkok).astimezone(UTC)
+
+        zeros = {
+            'emails_delivered': 0, 'credits_sold_units': 0, 'credits_refunded_units': 0,
+            'credits_refunded_sales_units': 0, 'credits_net_units': 0,
+            'binance_received_units': 0, 'binance_credits_units': 0,
+            'bank_received_satang': 0, 'bank_credits_units': 0,
+        }
+
+        def bounds(column):
+            clauses = [column.is_not(None)]
+            if start_utc is not None:
+                clauses.extend((column >= start_utc, column < end_utc))
+            return clauses
+
+        def local_day(column, dialect):
+            if dialect == 'postgresql':
+                return func.date(func.timezone('Asia/Bangkok', column))
+            return func.date(column, '+7 hours')
+
+        def aggregate(session, model, timestamp, conditions, metrics, *, joined=None):
+            query = select(*[func.coalesce(func.sum(expression), 0) for expression in metrics])
+            grouped_query = select(local_day(timestamp, session.bind.dialect.name),
+                                   *[func.coalesce(func.sum(expression), 0) for expression in metrics])
+            if joined is not None:
+                query = query.select_from(model).join(*joined)
+                grouped_query = grouped_query.select_from(model).join(*joined)
+            clauses = [*conditions, *bounds(timestamp)]
+            total_row = session.execute(query.where(*clauses)).one()
+            daily_query = (grouped_query.where(*clauses)
+                           .group_by(local_day(timestamp, session.bind.dialect.name))
+                           .order_by(local_day(timestamp, session.bind.dialect.name).desc())
+                           .limit(31 if all_time else 367))
+            rows = session.execute(daily_query).all()
+            return tuple(total_row), rows
+
+        with self.factory() as session:
+            order_total, order_days = aggregate(
+                session, Order, Order.delivered_at,
+                [Order.status.in_(('delivered', 'refunded'))],
+                (Order.quantity, Order.total_units))
+            refund_total, refund_days = aggregate(
+                session, Ledger, Ledger.created_at,
+                [Ledger.reference.like('refund:%'), Ledger.delta_units > 0],
+                (Ledger.delta_units,))
+            sales_refund_total, sales_refund_days = aggregate(
+                session, Ledger, Ledger.created_at,
+                [Ledger.reference.like('refund:%'), Ledger.delta_units > 0,
+                 Order.delivered_at.is_not(None)],
+                (Ledger.delta_units,),
+                joined=(Order, Ledger.reference == (literal('refund:') + Order.id)))
+            binance_total, binance_days = aggregate(
+                session, Payment, Payment.occurred_at,
+                [Payment.status == 'paid', Payment.currency == 'USDT'],
+                (Payment.amount_units, Payment.amount_units))
+            bank_total, bank_days = aggregate(
+                session, BankPayment, BankPayment.occurred_at,
+                [BankPayment.status == 'paid', BankTopup.status == 'paid'],
+                (BankPayment.amount_satang, BankTopup.credited_units),
+                joined=(BankTopup, BankPayment.topup_id == BankTopup.id))
+
+            totals = {
+                'emails_delivered': int(order_total[0] or 0),
+                'credits_sold_units': int(order_total[1] or 0),
+                'credits_refunded_units': int(refund_total[0] or 0),
+                'credits_refunded_sales_units': int(sales_refund_total[0] or 0),
+                'binance_received_units': int(binance_total[0] or 0),
+                'binance_credits_units': int(binance_total[1] or 0),
+                'bank_received_satang': int(bank_total[0] or 0),
+                'bank_credits_units': int(bank_total[1] or 0),
+            }
+            totals['credits_net_units'] = (totals['credits_sold_units']
+                                           - totals['credits_refunded_sales_units'])
+
+        daily = {}
+
+        def add_days(rows, value_keys):
+            for row in rows:
+                day = date.fromisoformat(row[0]) if isinstance(row[0], str) else row[0]
+                values = daily.setdefault(day, dict(zeros))
+                values.update(dict(zip(value_keys, (int(value or 0) for value in row[1:]), strict=True)))
+
+        add_days(order_days, ('emails_delivered', 'credits_sold_units'))
+        add_days(refund_days, ('credits_refunded_units',))
+        add_days(sales_refund_days, ('credits_refunded_sales_units',))
+        add_days(binance_days, ('binance_received_units', 'binance_credits_units'))
+        add_days(bank_days, ('bank_received_satang', 'bank_credits_units'))
+
+        truncated = False
+        if all_time:
+            truncated = (len(daily) > 30
+                         or any(len(rows) > 30 for rows in
+                                (order_days, refund_days, binance_days, bank_days)))
+            daily_rows = []
+            for day, values in sorted(daily.items())[-30:]:
+                row = {'date': day, **values}
+                row['credits_net_units'] = (values['credits_sold_units']
+                                            - values['credits_refunded_sales_units'])
+                daily_rows.append(row)
+        else:
+            current = start_date
+            daily_rows = []
+            while current <= end_date:
+                values = daily.get(current, dict(zeros))
+                row = {'date': current, **values}
+                row['credits_net_units'] = (values['credits_sold_units']
+                                            - values['credits_refunded_sales_units'])
+                daily_rows.append(row)
+                current += timedelta(days=1)
+        return {'all_time': all_time, 'start_date': start_date, 'end_date': end_date,
+                'daily': daily_rows, 'daily_truncated': truncated, 'totals': totals}
 
     def _price(self, session, lock=False, *, shared_lock=False):
         insert_once(session, Setting, {'name': 'price_units', 'value': self.price_units}, 'name')
@@ -679,6 +805,7 @@ class AppService:
         parts = [row for row in rows if row.topic != 'telegram_order']
         if parts and all(row.status == 'done' for row in rows):
             order.status = 'delivered'
+            order.delivered_at = utcnow()
             user = session.get(User, order.user_id)
             if user.id not in self.admin_ids:
                 self._enqueue(session, 'discord_order', {

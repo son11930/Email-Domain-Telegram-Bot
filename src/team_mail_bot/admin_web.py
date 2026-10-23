@@ -8,7 +8,7 @@ import json
 import secrets
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from threading import Lock
@@ -310,6 +310,37 @@ def create_app(service, settings, auth_client=None):
     def dashboard(request: Request):
         session(request)
         return view(request, 'ภาพรวม', summary=service.summary())
+
+    @app.get('/reports')
+    def reports(request: Request, period: str = 'today', start_date: str = '', end_date: str = ''):
+        session(request)
+        today = datetime.now(THAI_TIME).date()
+        if period == 'all':
+            start, end = None, None
+            report = service.sales_report(all_time=True)
+        else:
+            if period == 'today':
+                start = end = today
+            elif period == 'yesterday':
+                start = end = today - timedelta(days=1)
+            elif period in ('7', '30', '90', '365'):
+                start, end = today - timedelta(days=int(period) - 1), today
+            elif period == 'custom':
+                if (len(start_date) != 10 or len(end_date) != 10):
+                    raise HTTPException(400, 'กรุณาระบุวันที่เริ่มต้นและสิ้นสุดให้ครบ')
+                try:
+                    start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
+                except ValueError:
+                    raise HTTPException(400, 'รูปแบบวันที่ไม่ถูกต้อง') from None
+                if start.isoformat() != start_date or end.isoformat() != end_date:
+                    raise HTTPException(400, 'รูปแบบวันที่ไม่ถูกต้อง')
+                if start > end or end > today or (end - start).days > 365:
+                    raise HTTPException(400, 'ช่วงวันที่ไม่ถูกต้อง (เลือกได้สูงสุด 366 วันและห้ามเลือกวันอนาคต)')
+            else:
+                raise HTTPException(400, 'กรุณาเลือกช่วงเวลาที่ถูกต้อง')
+            report = service.sales_report(start, end)
+        return view(request, 'รายงานยอดตามช่วงเวลา', report=report, period=period,
+                    start_date=start.isoformat() if start else '', end_date=end.isoformat() if end else '')
 
     @app.get('/users')
     def users(request: Request, q: str = ''):

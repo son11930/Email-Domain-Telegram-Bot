@@ -1,9 +1,10 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
 from team_mail_bot.core import AppService, DomainError
 from team_mail_bot.db import create_session_factory, init_db
+from team_mail_bot.models import BankPayment, BankTopup, Ledger, Order, Payment, User
 
 
 @pytest.fixture
@@ -82,6 +83,7 @@ def test_admin_orders_complete_without_discord_order_notifications(service):
         admin_service.finish_outbox(job['id'], True, lease_token=job['lease_token'])
 
     assert admin_service.get_order(7, order['id'])['status'] == 'delivered'
+    assert admin_service.get_order(7, order['id'])['delivered_at']
     assert admin_service.claim_outbox() == []
 
     admin_service.ensure_user(8, 'Admin')
@@ -120,6 +122,109 @@ def test_dashboard_counts_only_successful_topup_payments(service):
     service.record_payment('success-topup', topup['expected_units'], 'USDT', created + timedelta(seconds=1))
 
     assert service.summary()['successful_topups'] == 1
+
+
+def test_sales_report_aggregates_deliveries_refunds_and_receipts_by_bangkok_day(service):
+    day = date(2026, 10, 23)
+    start_utc = datetime(2026, 10, 22, 17, tzinfo=UTC)
+    next_start = start_utc + timedelta(days=1)
+    with service.factory.begin() as session:
+        session.add_all([
+            User(id=7, name='Tester', balance_units=0),
+        ])
+        session.flush()
+        session.add_all([
+            Order(id='delivered', user_id=7, request_key='report:delivered', quantity=2,
+                  price_units=30_000_000, total_units=60_000_000, balance_units=0,
+                  status='delivered', created_at=start_utc, delivered_at=start_utc),
+            Order(id='refunded', user_id=7, request_key='report:refunded', quantity=1,
+                  price_units=30_000_000, total_units=30_000_000, balance_units=0,
+                  status='refunded', created_at=start_utc, delivered_at=next_start - timedelta(seconds=1)),
+            Order(id='pending', user_id=7, request_key='report:pending', quantity=5,
+                  price_units=30_000_000, total_units=150_000_000, balance_units=0,
+                  status='pending', created_at=start_utc, delivered_at=None),
+            Order(id='legacy-refunded', user_id=7, request_key='report:legacy-refunded', quantity=4,
+                  price_units=30_000_000, total_units=120_000_000, balance_units=0,
+                  status='refunded', created_at=start_utc, delivered_at=None),
+            Order(id='next-day', user_id=7, request_key='report:next-day', quantity=9,
+                  price_units=30_000_000, total_units=270_000_000, balance_units=0,
+                  status='delivered', created_at=next_start, delivered_at=next_start),
+            Ledger(user_id=7, delta_units=30_000_000, before_units=0,
+                   after_units=30_000_000, reason='refund', reference='refund:refunded',
+                   created_at=next_start - timedelta(seconds=1)),
+            Ledger(user_id=7, delta_units=120_000_000, before_units=0,
+                   after_units=120_000_000, reason='refund', reference='refund:legacy-refunded',
+                   created_at=next_start - timedelta(seconds=1)),
+            Payment(transaction_id='usdt-paid', amount_units=100_000_000, currency='USDT',
+                    receiver_id='r', order_type='topup', occurred_at=start_utc,
+                    status='paid'),
+            Payment(transaction_id='usdt-review', amount_units=200_000_000, currency='USDT',
+                    receiver_id='r', order_type='topup', occurred_at=start_utc,
+                    status='needs_review'),
+            BankTopup(id='bank-topup', user_id=7, base_satang=15_000, expected_satang=15_001,
+                      credited_units=43_500_000, status='paid', created_at=start_utc,
+                      expires_at=next_start),
+        ])
+        session.flush()
+        session.add(BankPayment(trans_ref='bank-paid', topup_id='bank-topup', amount_satang=15_001,
+                                occurred_at=start_utc, status='paid'))
+
+    report = service.sales_report(day, day)
+
+    assert report['totals'] == {
+        'emails_delivered': 3,
+        'credits_sold_units': 90_000_000,
+        'credits_refunded_units': 150_000_000,
+        'credits_refunded_sales_units': 30_000_000,
+        'credits_net_units': 60_000_000,
+        'binance_received_units': 100_000_000,
+        'binance_credits_units': 100_000_000,
+        'bank_received_satang': 15_001,
+        'bank_credits_units': 43_500_000,
+    }
+    assert len(report['daily']) == 1
+    assert report['daily'][0]['date'] == day
+    assert report['daily'][0]['credits_refunded_units'] == 150_000_000
+    assert report['daily'][0]['credits_refunded_sales_units'] == 30_000_000
+
+
+def test_sales_report_all_time_and_empty_range(service):
+    empty = service.sales_report(date(2026, 10, 23), date(2026, 10, 23))
+    all_time = service.sales_report(all_time=True)
+
+    assert empty['totals']['emails_delivered'] == 0
+    assert empty['daily'][0]['credits_net_units'] == 0
+    assert all_time['all_time'] is True
+    assert all_time['daily'] == []
+
+
+def test_sales_report_all_time_caps_merged_activity_days_without_truncating_totals(service):
+    with service.factory.begin() as session:
+        session.add(User(id=7, name='Tester', balance_units=0))
+        session.flush()
+        session.add_all([
+            Order(id=f'old-{index}', user_id=7, request_key=f'report:old:{index}', quantity=1,
+                  price_units=30_000_000, total_units=30_000_000, balance_units=0,
+                  status='delivered', created_at=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(days=index),
+                  delivered_at=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(days=index))
+            for index in range(40)
+        ])
+        session.add_all([
+            Payment(transaction_id=f'new-{index}', amount_units=100_000_000, currency='USDT',
+                    receiver_id='r', order_type='topup',
+                    occurred_at=datetime(2026, 5, 1, tzinfo=UTC) + timedelta(days=index),
+                    status='paid')
+            for index in range(40)
+        ])
+
+    report = service.sales_report(all_time=True)
+
+    assert report['totals']['emails_delivered'] == 40
+    assert report['totals']['binance_received_units'] == 4_000_000_000
+    assert report['daily_truncated'] is True
+    assert len(report['daily']) == 30
+    assert report['daily'][0]['date'] == date(2026, 5, 11)
+    assert report['daily'][-1]['date'] == date(2026, 6, 9)
 
 def test_topup_once_and_never_reuse(service):
     service.ensure_user(7)

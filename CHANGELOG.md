@@ -5,7 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - 2026-10-23
+## [Unreleased] - 2026-10-24
+
+### Added
+- Added an admin sales report with Bangkok date filters, daily and all-time summaries, delivered email and credit totals, refunds, and separate actual bank THB and Binance USDT receipts.
+- Added an indexed `orders.delivered_at` timestamp, set after successful delivery, with a one-time backfill for legacy delivered orders. Historical refunded orders without delivery evidence remain excluded from net sales.
+- Added a 30-activity-day display cap for all-time reports while retaining full-range totals.
 
 ### Security
 - Limited SlipOK verification to five reserved attempts per Telegram ID per Thailand calendar day using persistent database slots, and rejected previously seen image SHA-256 hashes before provider submission.

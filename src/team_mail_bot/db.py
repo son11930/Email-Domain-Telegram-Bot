@@ -1,5 +1,5 @@
 """SQLAlchemy sessions; PostgreSQL in production, SQLite for isolated tests."""
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -35,3 +35,24 @@ def init_db(factory):
                 for role in roles:
                     quoted_role = engine.dialect.identifier_preparer.quote(role)
                     connection.execute(text(f'REVOKE ALL ON TABLE {name} FROM {quoted_role}'))
+        order_columns = {column['name'] for column in inspect(connection).get_columns('orders')}
+        if 'delivered_at' not in order_columns:
+            timestamp_type = ('TIMESTAMP WITH TIME ZONE' if engine.dialect.name == 'postgresql'
+                              else 'DATETIME')
+            if engine.dialect.name == 'postgresql':
+                connection.execute(text('ALTER TABLE orders ADD COLUMN IF NOT EXISTS '
+                                        f'delivered_at {timestamp_type}'))
+            else:
+                connection.execute(text(f'ALTER TABLE orders ADD COLUMN delivered_at {timestamp_type}'))
+            connection.execute(text("UPDATE orders SET delivered_at = created_at "
+                                    "WHERE status = 'delivered' AND delivered_at IS NULL"))
+        for table in Base.metadata.sorted_tables:
+            for index in table.indexes:
+                if engine.dialect.name in ('postgresql', 'sqlite'):
+                    quote = engine.dialect.identifier_preparer.quote
+                    columns = ', '.join(quote(expression.name) for expression in index.expressions)
+                    connection.execute(text(
+                        f'CREATE INDEX IF NOT EXISTS {quote(index.name)} '
+                        f'ON {quote(table.name)} ({columns})'))
+                else:
+                    index.create(connection, checkfirst=True)

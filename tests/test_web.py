@@ -1,4 +1,5 @@
 import re
+from datetime import date
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -24,6 +25,23 @@ class Service:
 
     def list_users(self, query=''):
         return [{'id': 1, 'username': '<script>alert(1)</script>', 'balance_units': 30000000}]
+
+    def sales_report(self, start_date=None, end_date=None, *, all_time=False):
+        return {
+            'all_time': all_time, 'start_date': start_date, 'end_date': end_date,
+            'daily_truncated': False, 'totals': {
+                'emails_delivered': 3, 'credits_sold_units': 90_000_000,
+                'credits_refunded_units': 30_000_000, 'credits_net_units': 60_000_000,
+                'credits_refunded_sales_units': 30_000_000,
+                'bank_received_satang': 15_001, 'bank_credits_units': 43_500_000,
+                'binance_received_units': 100_000_000, 'binance_credits_units': 100_000_000,
+            }, 'daily': [{'date': date(2026, 10, 23), 'emails_delivered': 3,
+                'credits_sold_units': 90_000_000, 'credits_refunded_units': 30_000_000,
+                'credits_refunded_sales_units': 30_000_000,
+                'credits_net_units': 60_000_000, 'bank_received_satang': 15_001,
+                'bank_credits_units': 43_500_000, 'binance_received_units': 100_000_000,
+                'binance_credits_units': 100_000_000}],
+        }
 
 
 def client():
@@ -89,7 +107,7 @@ def test_login_failure_is_generic():
 def test_pages_credit_preview_confirm_and_logout():
     c = client()
     login(c)
-    for path in ('/', '/users', '/inventory', '/orders', '/topups', '/audit', '/settings', '/users/1/history'):
+    for path in ('/', '/reports', '/users', '/inventory', '/orders', '/topups', '/audit', '/settings', '/users/1/history'):
         assert c.get(path).status_code == 200
     assert 'โอนธนาคาร: 1 credit = 34.50 บาท' in c.get('/').text
     settings = c.get('/settings').text
@@ -167,6 +185,35 @@ def test_dashboard_shows_successful_topup_count_instead_of_pending():
     assert 'เติมเงินสำเร็จ (ครั้ง)' in page
     assert '>8<' in page
     assert 'รายการรอเติมเงิน' not in page
+
+
+def test_reports_are_admin_only_and_show_separate_sales_and_payment_currencies():
+    c = client()
+    assert c.get('/reports').url.path == '/login'
+    login(c)
+
+    page = c.get('/reports?period=custom&start_date=2026-10-23&end_date=2026-10-23').text
+
+    c.service.sales_report.assert_called_once_with(date(2026, 10, 23), date(2026, 10, 23))
+    assert 'เมลที่ส่งสำเร็จ' in page
+    assert 'เครดิตขายสุทธิ' in page
+    assert '150.01 บาท' in page
+    assert '1 USDT' in page
+    assert '23/10/2026' in page
+
+
+@pytest.mark.parametrize('query', [
+    'period=unknown',
+    'period=custom&start_date=2026-10-24&end_date=2026-10-23',
+    'period=custom&start_date=2026-10-24&end_date=2026-10-25',
+    'period=custom&start_date=10-24&end_date=2026-10-24',
+])
+def test_reports_reject_invalid_date_filters(query):
+    c = client()
+    login(c)
+
+    assert c.get('/reports?' + query).status_code == 400
+    c.service.sales_report.assert_not_called()
 
 
 def test_topup_status_and_timestamps_are_readable_in_thai():

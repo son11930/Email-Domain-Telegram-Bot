@@ -8,6 +8,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
 )
@@ -46,6 +47,9 @@ class Order(Base):
     balance_units: Mapped[int] = mapped_column(BigInteger)
     status: Mapped[str] = mapped_column(String(20), default='pending')
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (Index('ix_orders_status_delivered_at', 'status', 'delivered_at'),)
 
 class OrderItem(Base):
     __tablename__ = 'order_items'
@@ -55,7 +59,8 @@ class OrderItem(Base):
 
 class Ledger(Base):
     __tablename__ = 'wallet_ledger'
-    __table_args__ = (CheckConstraint('after_units >= 0'),)
+    __table_args__ = (CheckConstraint('after_units >= 0'),
+                      Index('ix_wallet_ledger_created_at_reference', 'created_at', 'reference'))
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey('users.id'), index=True)
     delta_units: Mapped[int] = mapped_column(BigInteger)
@@ -83,6 +88,7 @@ class AmountLease(Base):
 
 class Payment(Base):
     __tablename__ = 'payment_events'
+    __table_args__ = (Index('ix_payment_events_status_occurred_at', 'status', 'occurred_at'),)
     transaction_id: Mapped[str] = mapped_column(String(256), primary_key=True)
     amount_units: Mapped[int] = mapped_column(BigInteger)
     currency: Mapped[str] = mapped_column(String(20))
@@ -108,7 +114,8 @@ class BankTopup(Base):
 
 class BankPayment(Base):
     __tablename__ = 'bank_payment_events'
-    __table_args__ = (CheckConstraint('amount_satang > 0'),)
+    __table_args__ = (CheckConstraint('amount_satang > 0'),
+                      Index('ix_bank_payment_events_status_occurred_at', 'status', 'occurred_at'))
     trans_ref: Mapped[str] = mapped_column(String(256), primary_key=True)
     topup_id: Mapped[str] = mapped_column(ForeignKey('bank_topup_requests.id'), index=True)
     amount_satang: Mapped[int] = mapped_column(BigInteger)
