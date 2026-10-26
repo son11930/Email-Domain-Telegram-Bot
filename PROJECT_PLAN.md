@@ -2,10 +2,11 @@
 
 ## งานติดตาม: แก้หน้า Reports PostgreSQL GroupingError และตรวจสอบรายการ Telegram 19:08
 
-- สถานะ: แก้และ review แล้ว; กำลัง deploy (2026-10-26)
+- สถานะ: deploy ผ่าน bot-manager และ production report query ผ่านแล้ว (2026-10-26); bot/worker/web active
 - เป้าหมาย: แก้ `/reports` ที่ตอบ Internal Server Error และอธิบายว่ารายการ Telegram เวลา 19:08 ที่ผู้ใช้เห็นแต่ไม่เห็นเป็นแถวใหม่ใน `/orders` คืออะไร
 - หลักฐาน: web log บน VPS ระบุ PostgreSQL `GroupingError` ใน partial-delivery aggregation เพราะ SELECT/GROUP BY สร้าง JSON `order_id` expression แยกกัน; ภาพ `/orders` แสดง order ID `a446…` ที่เวลา 18:52:49 และ ID ใหม่ `1a974…` ที่ 19:10:28 ขณะที่ข้อความ Telegram 19:08 อ้าง ID `a446…` เดิม
-- แผน: เพิ่ม regression test ให้ยืนยันว่า SQLAlchemy ใช้ bind expression เดียวกันใน SELECT/GROUP BY; แก้ query โดยสร้าง expression เดียวแล้ว reuse; ทดสอบชุดที่เกี่ยวข้องและ full suite; deploy ผ่าน `bot-manager.bat` และตรวจ status/services กับ `/reports`
+- วิธีแก้/ตรวจ: เพิ่ม regression test ที่ล้มก่อนแก้เพราะสร้าง `order_id` bind สองตัว; reuse JSON expression เดียวใน SELECT/GROUP BY; 245 tests ผ่าน, coverage 89.48%, Ruff ผ่าน, 9 PostgreSQL tests ข้ามเพราะไม่มี `TEST_DATABASE_URL`; deploy ผ่าน `bot-manager.bat`, ทั้งสาม service active และ production `sales_report(all_time=True)` query ผ่าน (211 delivered emails)
+- สรุป order: Telegram 19:08 อ้าง ID `a446…` เดิมซึ่งมีแถวใน `/orders` เวลา 18:52:49; ออเดอร์ใหม่ `1a974…` ปรากฏเวลา 19:10:28 จึงไม่มี UUID ใหม่เวลา 19:08 ตามภาพ
 - ความเสี่ยง: PostgreSQL integration tests ต้องใช้ test database แยก ห้ามใช้ production database เพื่อรัน tests; อย่าถือข้อความ Telegram ที่อ้าง ID เก่าว่าเป็นการสร้าง order ใหม่
 
 ## งานเพิ่มเติม: แจ้งส่งเมลไม่สำเร็จและคืนเครดิตเฉพาะส่วน
