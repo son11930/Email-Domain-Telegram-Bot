@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] - 2026-10-24
 
 ### Fixed
+- Fixed misleading Telegram purchase confirmations when an old quick-buy callback replays an existing idempotency key; the bot now says no new order, delivery job, or charge was created and shows the existing order status.
 - Fixed PostgreSQL grouping in the partial-delivery sales-report query by reusing the same JSON order-id expression for SELECT and GROUP BY.
 
 ### Added

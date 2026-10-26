@@ -28,7 +28,10 @@ def test_purchase_atomic_and_duplicate(service):
     order = service.purchase(7, 2, 'nonce')
     assert order['total_units'] == 60_000_000
     assert order['balance_units'] == 40_000_000
-    assert service.purchase(7, 2, 'nonce')['id'] == order['id']
+    assert order['idempotent_replay'] is False
+    replay = service.purchase(7, 2, 'nonce')
+    assert replay['id'] == order['id']
+    assert replay['idempotent_replay'] is True
     assert len(service.list_orders()) == 1
     with pytest.raises(DomainError):
         service.purchase(7, 2, 'other')

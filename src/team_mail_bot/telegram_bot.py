@@ -282,6 +282,14 @@ class TelegramController:
     async def buy(self, message, user_id, quantity, key, price):
         order = await self.call('purchase', user_id, quantity, key,
                                 expected_price_units=price, include_emails=False)
+        if order.get('idempotent_replay'):
+            status = web_order_status(order.get('status'))
+            await self.say(message,
+                           f'ℹ️ ปุ่มนี้อ้างถึงออเดอร์เดิม {order["id"]}\n'
+                           'ไม่มีการสร้างออเดอร์หรืองานส่งใหม่ และไม่มีการหักเครดิตเพิ่ม\n'
+                           f'สถานะออเดอร์เดิม: {status}\n'
+                           'ตรวจสอบได้ที่ประวัติ หรือใช้ปุ่มซื้อจากเมนูล่าสุดเพื่อสั่งใหม่')
+            return await self.menu(message, user_id)
         await self.say(message, f'✅ บันทึกรายการ {order["id"]} แล้ว ระบบกำลังส่งเมล\n'
                        'ดูหรือขอส่งรายการเดิมได้ในประวัติ')
         await self.menu(message, user_id)

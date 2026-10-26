@@ -96,6 +96,10 @@ def test_quick_buttons_bind_user_and_nonce():
 
 def test_quick_purchase_rejects_forged_owner_and_reuses_key():
     svc = service()
+    svc.purchase.side_effect = [
+        {'id': 'order1', 'status': 'pending', 'idempotent_replay': False},
+        {'id': 'order1', 'status': 'pending', 'idempotent_replay': True},
+    ]
     controller = TelegramController(svc, settings())
     cb = SimpleNamespace(from_user=SimpleNamespace(id=1), message=message(),
                          data='q:2:30000000:abc', answer=AsyncMock())
@@ -105,6 +109,10 @@ def test_quick_purchase_rejects_forged_owner_and_reuses_key():
     run(controller.callback(cb, state()))
     run(controller.callback(cb, state()))
     assert svc.purchase.call_args_list[0] == svc.purchase.call_args_list[1]
+    replies = [call.args[0] for call in cb.message.answer.await_args_list]
+    assert any('กำลังส่งเมล' in reply for reply in replies)
+    assert any('ออเดอร์เดิม' in reply and 'ไม่มีการหักเครดิตเพิ่ม' in reply
+               and 'กำลังส่งเมล' not in reply for reply in replies)
 
 
 def test_admin_callback_and_stale_import_require_admin():

@@ -521,7 +521,8 @@ class AppService:
             user = self._user(session, user_id, True)
             previous = session.scalar(select(Order).where(Order.request_key == key))
             if previous:
-                return (self._order(session, previous) if include_emails else dto(previous))
+                result = (self._order(session, previous) if include_emails else dto(previous))
+                return {**result, 'idempotent_replay': True}
             price = self._price(session, shared_lock=True)
             if expected_price_units is not None and expected_price_units != price:
                 raise DomainError('Price changed; please confirm the new price')
@@ -543,7 +544,8 @@ class AppService:
                 session.add(OrderItem(order_id=order_id, email_id=email.id))
             self._enqueue(session, 'telegram_order', {'order_id': order_id, 'user_id': user_id}, 'telegram_order:' + order_id)
             session.flush()
-            return (self._order(session, order) if include_emails else dto(order))
+            result = self._order(session, order) if include_emails else dto(order)
+            return {**result, 'idempotent_replay': False}
 
     def list_orders(self):
         with self.factory() as session:
