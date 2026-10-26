@@ -36,6 +36,14 @@ def format_units(units: int) -> str:
     return f'{Decimal(units) / UNITS:.8f}'.rstrip('0').rstrip('.') or '0'
 
 
+def web_order_status(status):
+    return {'pending': 'กำลังส่ง', 'delivered': 'ส่งสำเร็จ',
+            'failed': 'ไม่สำเร็จ · คืนเครดิตแล้ว',
+            'partial_failed': 'ส่งบางส่วน · คืนเครดิตบางส่วน',
+            'delivery_review': 'ส่งไม่สำเร็จ · รอตรวจเครดิต',
+            'refunded': 'คืนเครดิตแล้ว'}.get(status, 'กำลังดำเนินการ')
+
+
 def parse_amount(value: str, *, decimals: int = 8, signed: bool = False) -> int:
     pattern = rf'{"[+-]?" if signed else ""}\d{{1,9}}(?:\.\d{{1,{decimals}}})?'
     if not re.fullmatch(pattern, value.strip()):
@@ -372,18 +380,20 @@ class TelegramController:
         lines = ['📋 ประวัติล่าสุด']
         buttons = []
         for order in orders[:10]:
-            lines += [f'ซื้อ {order["id"]}: {order.get("quantity", "")} เมล']
-            buttons += [[(f'ส่งซ้ำ {order["id"]}', f'resend:{order["id"]}')]]
+            lines += [(f'ซื้อ {order["id"]}: {order.get("quantity", "")} เมล · '
+                       f'{web_order_status(order.get("status"))}')]
+            if order.get('status') == 'delivered':
+                buttons += [[(f'ส่งซ้ำ {order["id"]}', f'resend:{order["id"]}')]]
         for entry in data.get('ledger', [])[:10]:
             lines += [f'{entry.get("kind", "เครดิต")}: {format_units(entry["delta_units"])} credit']
         await self.say(message, '\n'.join(lines) if len(lines) > 1 else 'ยังไม่มีประวัติ',
                        keyboard(*buttons, [('เมนูหลัก', 'menu')]))
 
     async def resend(self, message, user_id, order_id):
-        order = await self.call('get_order', user_id, order_id)
-        nonce = uuid4().hex
-        await self.call('enqueue', 'telegram_order', {'order_id': order['id'], 'user_id': user_id},
-                        f'resend:{order["id"]}:{nonce}')
+        try:
+            await self.call('request_order_resend', user_id, order_id, uuid4().hex)
+        except DomainError as exc:
+            return await self.say(message, str(exc))
         await self.say(message, 'รับคำขอส่งรายการเดิมแล้ว ไม่หักเครดิตเพิ่ม')
 
     async def admin(self, message, state, action):

@@ -3,7 +3,12 @@ from datetime import UTC, date, datetime, timedelta
 import pytest
 from sqlalchemy.dialects import postgresql
 
-from team_mail_bot.core import AppService, DomainError, _report_daily_query
+from team_mail_bot.core import (
+    AppService,
+    DomainError,
+    _report_daily_query,
+    _report_partial_delivery_query,
+)
 from team_mail_bot.db import create_session_factory, init_db
 from team_mail_bot.models import BankPayment, BankTopup, Ledger, Order, Payment, User
 
@@ -78,6 +83,7 @@ def test_admin_orders_complete_without_discord_order_notifications(service):
     admin_service.import_emails(1, 'owner@example.org')
     order = admin_service.purchase(7, 1, 'admin-order')
     admin_service.enqueue('telegram_text', {'order_id': order['id'], 'user_id': 7,
+        'delivery_kind': 'email', 'email_count': 1, 'refund_eligible': True,
         'text': 'owner@example.org'}, 'admin-order-text')
 
     for job in admin_service.claim_outbox():
@@ -236,6 +242,18 @@ def test_postgres_daily_report_reuses_timezone_expression_in_group_by():
     assert 'GROUP BY date(timezone(%(timezone_1)s::VARCHAR, orders.delivered_at))' in compiled
     assert compiled.count('%(timezone_1)s') == 3
     assert '%(timezone_2)s' not in compiled
+
+
+def test_partial_delivery_report_query_compiles_for_postgresql(service):
+    with service.factory() as session:
+        query = _report_partial_delivery_query(session, None, None, limit=31,
+                                               dialect='postgresql')
+    compiled = str(query.compile(dialect=postgresql.dialect()))
+
+    assert 'GROUP BY date(timezone(' in compiled
+    assert 'delivery_outbox' in compiled
+    params = query.compile(dialect=postgresql.dialect()).params
+    assert ['partial_failed', 'delivery_review'] in params.values()
 
 def test_topup_once_and_never_reuse(service):
     service.ensure_user(7)
@@ -462,7 +480,8 @@ def test_outbox_delivery_status_and_owner_checks(service):
     with pytest.raises(DomainError):
         service.get_order(8, order['id'])
     service.enqueue('telegram_document', {'order_id': order['id'], 'user_id': 7}, 'document:' + order['id'])
-    service.enqueue('telegram_text', {'order_id': order['id'], 'user_id': 7}, 'text:' + order['id'])
+    service.enqueue('telegram_text', {'order_id': order['id'], 'user_id': 7,
+        'delivery_kind': 'email', 'email_count': 1, 'refund_eligible': True}, 'text:' + order['id'])
     rows = service.claim_outbox()
     assert len(rows) == 3
     assert service.claim_outbox() == []
@@ -644,6 +663,203 @@ def test_refund_cancels_all_unsent_delivery_parts(service):
             assert service.finish_outbox(job['id'], False, lease_token=job['lease_token']) is False
     assert all(not job['topic'].startswith('telegram_') for job in service.claim_outbox())
     assert service.get_order(7, order['id'])['status'] == 'refunded'
+
+
+def test_terminal_email_rejection_refunds_once_and_notifies_buyer(service):
+    service.ensure_user(7, 'Buyer')
+    service.adjust_credit(1, 7, delta_units=100_000_000, reason='seed', request_key='terminal-seed')
+    service.import_emails(1, 'failed@example.org')
+    order = service.purchase(7, 1, 'terminal-purchase')
+    parent, = service.claim_outbox()
+    service.finish_outbox(parent['id'], True, lease_token=parent['lease_token'])
+    service.enqueue('telegram_text', {'order_id': order['id'], 'user_id': 7,
+        'delivery_kind': 'email', 'email_count': 1, 'refund_eligible': True,
+        'text': 'failed@example.org'},
+        'terminal-email-part')
+    job, = service.claim_outbox()
+
+    assert service.finish_outbox(job['id'], False, error='TelegramBadRequest',
+        permanent_failure=True, lease_token=job['lease_token']) is True
+    assert service.get_user(7)['balance_units'] == 100_000_000
+    assert service.get_order(7, order['id'])['status'] == 'failed'
+    totals = service.sales_report(all_time=True)['totals']
+    assert totals['emails_delivered'] == 0
+    assert totals['credits_refunded_units'] == 30_000_000
+    assert totals['credits_refunded_sales_units'] == 0
+    assert totals['credits_net_units'] == 0
+    assert service.finish_outbox(job['id'], False, error='TelegramBadRequest',
+        permanent_failure=True, lease_token=job['lease_token']) is False
+
+    notice, = [row for row in service.claim_outbox() if row['topic'] == 'telegram_delivery_failure']
+    assert notice['payload']['refund_units'] == 30_000_000
+    assert notice['payload']['failed_emails'] == 1
+    assert 'failed@example.org' not in str(notice['payload'])
+
+
+def test_legacy_initial_email_job_can_be_safely_refunded_from_parent_key(service):
+    service.ensure_user(7, 'Buyer')
+    service.adjust_credit(1, 7, delta_units=100_000_000, reason='seed', request_key='legacy-seed')
+    service.import_emails(1, 'legacy@example.org')
+    order = service.purchase(7, 1, 'legacy-purchase')
+    parent, = service.claim_outbox()
+    service.finish_outbox(parent['id'], True, lease_token=parent['lease_token'])
+    service.enqueue('telegram_text', {'order_id': order['id'], 'user_id': 7,
+        'text': 'legacy@example.org'}, f'delivery:{parent["id"]}:text:0')
+    job, = service.claim_outbox()
+
+    service.finish_outbox(job['id'], False, error='TelegramBadRequest',
+        permanent_failure=True, delivery_kind='email', email_count=1,
+        lease_token=job['lease_token'])
+
+    assert service.get_user(7)['balance_units'] == 100_000_000
+    assert service.get_order(7, order['id'])['status'] == 'failed'
+
+
+def test_partial_terminal_email_rejection_refunds_only_failed_email_and_ignores_summary(service):
+    service.ensure_user(7, 'Buyer')
+    service.adjust_credit(1, 7, delta_units=100_000_000, reason='seed', request_key='partial-seed')
+    service.import_emails(1, 'sent@example.org\nfailed@example.org')
+    order = service.purchase(7, 2, 'partial-purchase')
+    parent, = service.claim_outbox()
+    service.finish_outbox(parent['id'], True, lease_token=parent['lease_token'])
+    service.enqueue('telegram_text', {'order_id': order['id'], 'user_id': 7,
+        'delivery_kind': 'email', 'email_count': 1, 'refund_eligible': True,
+        'text': 'sent@example.org'}, 'partial-email-sent')
+    service.enqueue('telegram_text', {'order_id': order['id'], 'user_id': 7,
+        'delivery_kind': 'email', 'email_count': 1, 'refund_eligible': True,
+        'text': 'failed@example.org'}, 'partial-email-failed')
+    service.enqueue('telegram_text', {'order_id': order['id'], 'user_id': 7,
+        'delivery_kind': 'summary', 'text': 'summary'}, 'partial-summary')
+    jobs = service.claim_outbox()
+    sent = next(job for job in jobs if job['payload'].get('delivery_kind') == 'email'
+                and 'sent@example.org' in job['payload']['text'])
+    failed = next(job for job in jobs if job['payload'].get('delivery_kind') == 'email'
+                  and 'failed@example.org' in job['payload']['text'])
+    summary = next(job for job in jobs if job['payload'].get('delivery_kind') == 'summary')
+
+    service.finish_outbox(sent['id'], True, lease_token=sent['lease_token'])
+    service.finish_outbox(failed['id'], False, error='TelegramBadRequest',
+        permanent_failure=True, lease_token=failed['lease_token'])
+    service.finish_outbox(summary['id'], False, error='TelegramBadRequest',
+        permanent_failure=True, lease_token=summary['lease_token'])
+
+    assert service.get_user(7)['balance_units'] == 70_000_000
+    assert service.get_order(7, order['id'])['status'] == 'partial_failed'
+    notices = [job for job in service.claim_outbox() if job['topic'] == 'telegram_delivery_failure']
+    assert len(notices) == 1
+    assert notices[0]['payload']['failed_emails'] == 1
+    assert notices[0]['payload']['refund_units'] == 30_000_000
+    totals = service.sales_report(all_time=True)['totals']
+    assert totals['emails_delivered'] == 1
+    assert totals['credits_sold_units'] == 60_000_000
+    assert totals['credits_refunded_units'] == 30_000_000
+    assert totals['credits_refunded_sales_units'] == 30_000_000
+    assert totals['credits_net_units'] == 30_000_000
+
+
+def test_terminal_summary_rejection_does_not_refund_successfully_sent_email(service):
+    service.ensure_user(7, 'Buyer')
+    service.adjust_credit(1, 7, delta_units=100_000_000, reason='seed', request_key='summary-seed')
+    service.import_emails(1, 'sent@example.org')
+    order = service.purchase(7, 1, 'summary-purchase')
+    parent, = service.claim_outbox()
+    service.finish_outbox(parent['id'], True, lease_token=parent['lease_token'])
+    service.enqueue('telegram_text', {'order_id': order['id'], 'user_id': 7,
+        'delivery_kind': 'email', 'email_count': 1, 'refund_eligible': True,
+        'text': 'sent@example.org'}, 'summary-email')
+    service.enqueue('telegram_text', {'order_id': order['id'], 'user_id': 7,
+        'delivery_kind': 'summary', 'text': 'summary'}, 'summary-message')
+    jobs = service.claim_outbox()
+    email_job = next(row for row in jobs if row['payload'].get('delivery_kind') == 'email')
+    summary_job = next(row for row in jobs if row['payload'].get('delivery_kind') == 'summary')
+
+    service.finish_outbox(email_job['id'], True, lease_token=email_job['lease_token'])
+    service.finish_outbox(summary_job['id'], False, error='TelegramBadRequest',
+        permanent_failure=True, lease_token=summary_job['lease_token'])
+
+    assert service.get_user(7)['balance_units'] == 70_000_000
+    assert service.get_order(7, order['id'])['status'] == 'delivered'
+    assert not [row for row in service.claim_outbox()
+                if row['topic'] == 'telegram_delivery_failure']
+
+
+def test_stale_outbox_lease_cannot_trigger_automatic_refund(service, monkeypatch):
+    from team_mail_bot import core
+
+    now = core.utcnow()
+    monkeypatch.setattr(core, 'utcnow', lambda: now)
+    service.ensure_user(7, 'Buyer')
+    service.adjust_credit(1, 7, delta_units=100_000_000, reason='seed', request_key='lease-seed')
+    service.import_emails(1, 'lease@example.org')
+    order = service.purchase(7, 1, 'lease-purchase')
+    parent, = service.claim_outbox()
+    service.finish_outbox(parent['id'], True, lease_token=parent['lease_token'])
+    service.enqueue('telegram_text', {'order_id': order['id'], 'user_id': 7,
+        'delivery_kind': 'email', 'email_count': 1, 'refund_eligible': True,
+        'text': 'lease@example.org'}, 'lease-email')
+    first, = service.claim_outbox()
+    now += timedelta(seconds=301)
+    second, = service.claim_outbox()
+
+    assert service.finish_outbox(first['id'], False, error='TelegramBadRequest',
+        permanent_failure=True, lease_token=first['lease_token']) is False
+    assert service.get_user(7)['balance_units'] == 70_000_000
+    assert service.finish_outbox(second['id'], True, lease_token=second['lease_token']) is True
+    assert service.get_order(7, order['id'])['status'] == 'delivered'
+    assert service.get_user(7)['balance_units'] == 70_000_000
+
+
+def test_resend_is_only_allowed_for_delivered_orders_and_only_one_can_be_active(service):
+    service.ensure_user(7, 'Buyer')
+    service.adjust_credit(1, 7, delta_units=100_000_000, reason='seed', request_key='resend-seed')
+    service.import_emails(1, 'resend@example.org')
+    order = service.purchase(7, 1, 'resend-purchase')
+
+    with pytest.raises(DomainError, match='เฉพาะรายการที่ส่งสำเร็จ'):
+        service.request_order_resend(7, order['id'], 'too-early')
+    parent, = service.claim_outbox()
+    service.finish_outbox(parent['id'], True, lease_token=parent['lease_token'])
+    service.enqueue('telegram_text', {'order_id': order['id'], 'user_id': 7,
+        'delivery_kind': 'email', 'email_count': 1, 'refund_eligible': True,
+        'text': 'resend@example.org'}, 'resend-original-email')
+    email, = service.claim_outbox()
+    service.finish_outbox(email['id'], True, lease_token=email['lease_token'])
+    assert service.get_order(7, order['id'])['status'] == 'delivered'
+
+    service.request_order_resend(7, order['id'], 'once')
+    with pytest.raises(DomainError, match='กำลังดำเนินการ'):
+        service.request_order_resend(7, order['id'], 'twice')
+
+
+def test_failed_resend_does_not_refund_already_delivered_order(service):
+    service.ensure_user(7, 'Buyer')
+    service.adjust_credit(1, 7, delta_units=100_000_000, reason='seed', request_key='resend-fail-seed')
+    service.import_emails(1, 'already-sent@example.org')
+    order = service.purchase(7, 1, 'resend-fail-purchase')
+    parent, = service.claim_outbox()
+    service.finish_outbox(parent['id'], True, lease_token=parent['lease_token'])
+    service.enqueue('telegram_text', {'order_id': order['id'], 'user_id': 7,
+        'delivery_kind': 'email', 'email_count': 1, 'refund_eligible': True,
+        'text': 'already-sent@example.org'}, 'resend-fail-original')
+    original, = service.claim_outbox()
+    service.finish_outbox(original['id'], True, lease_token=original['lease_token'])
+    service.request_order_resend(7, order['id'], 'retry')
+    resend, = [row for row in service.claim_outbox() if row['topic'] == 'telegram_order']
+    service.finish_outbox(resend['id'], True, lease_token=resend['lease_token'])
+    service.enqueue('telegram_text', {'order_id': order['id'], 'user_id': 7,
+        'delivery_mode': 'resend', 'delivery_kind': 'email', 'email_count': 1,
+        'refund_eligible': False, 'text': 'already-sent@example.org'}, 'resend-fail-child')
+    child, = [row for row in service.claim_outbox() if row['topic'] == 'telegram_text']
+
+    service.finish_outbox(child['id'], False, error='TelegramBadRequest',
+        permanent_failure=True, delivery_kind='email', email_count=1,
+        refund_eligible=False, lease_token=child['lease_token'])
+
+    assert service.get_user(7)['balance_units'] == 70_000_000
+    assert service.get_order(7, order['id'])['status'] == 'delivered'
+    notice, = [row for row in service.claim_outbox()
+               if row['topic'] == 'telegram_delivery_failure']
+    assert notice['payload']['refund_applied'] is False
 
 
 @pytest.mark.parametrize('scheme', ['postgresql', 'postgres'])

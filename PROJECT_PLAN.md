@@ -1,5 +1,14 @@
 # Project Plan
 
+## งานเพิ่มเติม: แจ้งส่งเมลไม่สำเร็จและคืนเครดิตเฉพาะส่วน
+
+- สถานะ: เสร็จใน working tree (2026-10-26); ยังไม่ได้ deploy
+- เป้าหมาย: แจ้งผู้ซื้อเมื่อ Telegram ปฏิเสธการส่งอีเมลอย่างชัดเจน และคืนเครดิตเฉพาะจำนวนเมลที่ไม่ได้ส่ง; แสดงสถานะไม่สำเร็จใน dashboard
+- ขอบเขต: แยก outbox ของเนื้อหาอีเมลออกจากข้อความสรุป/ไฟล์สำรอง; retry ความผิดพลาดชั่วคราวหรือผลลัพธ์คลุมเครือ; ห้ามคืนเต็มเมื่อส่งบางส่วนแล้ว; ป้องกัน resend ของออเดอร์ที่คืนเครดิตแล้ว
+- วิธีทำ: เพิ่ม metadata จำนวนเมล/สิทธิ์คืนเครดิตต่อ outbox part, ปิดงานเฉพาะการ reject ถาวร, refund ledger แบบ idempotent ต่อ part, แจ้งยอดคืน/ยอดคงเหลือ และ final order state เมื่อ email part จบ; แยกการส่งซ้ำซึ่งคืนเครดิตไม่ได้และกันคำขอซ้ำขณะงานยัง active; ปรับรายงานคืนเครดิต/ส่งบางส่วน
+- วิธีตรวจ: 245 tests ผ่าน, 9 PostgreSQL integration tests ข้ามเพราะไม่มี `TEST_DATABASE_URL`; Ruff และ `git diff --check` ผ่าน; code review ไม่พบ blocker
+- ความเสี่ยง: timeout อาจเกิดหลัง Telegram รับข้อความแล้ว จึงห้าม refund จาก timeout/network error; แจ้งเตือนลูกค้าอาจส่งไม่ได้หากบล็อกบอท
+
 ## งานเพิ่มเติม: ปรับอัตราเติมเงินธนาคารและแก้ผ่านเว็บ
 
 - สถานะ: deploy ผ่าน bot-manager; bot/worker/web active และ dashboard HTTP 200; 224 tests ผ่าน, 9 PostgreSQL integration tests ข้ามเพราะไม่มี `TEST_DATABASE_URL`; Ruff ผ่าน

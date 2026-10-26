@@ -330,16 +330,14 @@ def test_cancel_command_cancels_pending_bank_topup():
 def test_stock_history_and_resend_only_owner_requested():
     svc = service()
     svc.get_stock.return_value = 7
-    svc.history = Mock(return_value={'orders': [{'id': 'mine', 'quantity': 2}],
+    svc.history = Mock(return_value={'orders': [{'id': 'mine', 'quantity': 2, 'status': 'delivered'}],
                                      'ledger': [{'delta_units': -60_000_000}]})
-    svc.get_order = Mock(return_value={'id': 'mine'})
-    svc.enqueue = Mock()
+    svc.request_order_resend = Mock()
     controller = TelegramController(svc, settings())
     for action in ['stock', 'history', 'balance', 'resend:mine', 'unknown', 'menu']:
         run(controller.callback(callback(action), MemoryState()))
-    svc.get_order.assert_called_once_with(1, 'mine')
-    assert svc.enqueue.call_args.args[0] == 'telegram_order'
-    assert svc.enqueue.call_args.args[1] == {'order_id': 'mine', 'user_id': 1}
+    assert svc.request_order_resend.call_args.args[:2] == (1, 'mine')
+    assert len(svc.request_order_resend.call_args.args[2]) == 32
     svc.purchase.assert_not_called()
 
 

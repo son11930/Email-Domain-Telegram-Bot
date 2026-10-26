@@ -5,7 +5,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import String, cast, func, literal, or_, select, update
+from sqlalchemy import String, case, cast, func, literal, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
@@ -96,6 +96,34 @@ def _report_daily_query(model, timestamp, dialect, metrics, *, limit):
             .order_by(day_expression.desc())
             .limit(limit))
 
+
+def _partial_email_jobs():
+    return (select(Outbox.payload['order_id'].as_string().label('order_id'),
+                   func.sum(case((Outbox.status == 'done',
+                                  Outbox.payload['email_count'].as_integer()), else_=0))
+                   .label('delivered_count'))
+            .where(Outbox.topic == 'telegram_text',
+                   Outbox.payload['delivery_kind'].as_string() == 'email',
+                   Outbox.payload['refund_eligible'].as_boolean().is_(True))
+            .group_by(Outbox.payload['order_id'].as_string()).subquery())
+
+
+def _report_partial_delivery_query(session, start_utc, end_utc, *, limit, dialect=None):
+    timestamp = Order.delivered_at
+    day_expression = (func.date(func.timezone('Asia/Bangkok', timestamp))
+                      if (dialect or session.bind.dialect.name) == 'postgresql'
+                      else func.date(timestamp, '+7 hours'))
+    email_jobs = _partial_email_jobs()
+    query = (select(day_expression.label('report_day'),
+                    func.coalesce(func.sum(email_jobs.c.delivered_count), 0),
+                    func.coalesce(func.sum(Order.total_units), 0))
+             .select_from(Order).join(email_jobs, email_jobs.c.order_id == Order.id)
+             .where(Order.status.in_(('partial_failed', 'delivery_review')),
+                    Order.delivered_at.is_not(None)))
+    if start_utc is not None:
+        query = query.where(Order.delivered_at >= start_utc, Order.delivered_at < end_utc)
+    return query.group_by(day_expression).order_by(day_expression.desc()).limit(limit)
+
 class AppService:
     def __init__(self, session_factory, *, price_units=30_000_000, precision=4,
                  topup_ttl_seconds=480, max_order_quantity=1000, topup_daily_limit=3,
@@ -160,7 +188,7 @@ class AppService:
             return {'users': count(User), 'available_emails': count(Email, Email.status == 'available'),
                     'orders': count(Order), 'successful_topups': count(Payment, Payment.status == 'paid') + paid_bank,
                     'needs_review': count(Payment, Payment.status == 'needs_review') + review_bank,
-                    'pending_outbox': count(Outbox, Outbox.status != 'done'),
+                    'pending_outbox': count(Outbox, Outbox.status.in_(('pending', 'processing'))),
                     'total_sales_units': session.scalar(select(func.coalesce(func.sum(Order.total_units), 0))),
                     'total_topup_units': session.scalar(select(func.coalesce(func.sum(Payment.amount_units), 0)).where(Payment.status == 'paid')) +
                                          session.scalar(select(func.coalesce(func.sum(BankTopup.credited_units), 0)).where(BankTopup.status == 'paid')),
@@ -214,16 +242,28 @@ class AppService:
                 session, Order, Order.delivered_at,
                 [Order.status.in_(('delivered', 'refunded'))],
                 (Order.quantity, Order.total_units))
+            partial_jobs = _partial_email_jobs()
+            partial_conditions = [Order.status.in_(('partial_failed', 'delivery_review')),
+                                  Order.delivered_at.is_not(None), *bounds(Order.delivered_at)]
+            partial_total = tuple(session.execute(select(
+                func.coalesce(func.sum(partial_jobs.c.delivered_count), 0),
+                func.coalesce(func.sum(Order.total_units), 0)).select_from(Order).join(
+                    partial_jobs, partial_jobs.c.order_id == Order.id).where(
+                        *partial_conditions)).one())
+            partial_days = session.execute(_report_partial_delivery_query(
+                session, start_utc, end_utc, limit=31 if all_time else 367)).all()
             refund_total, refund_days = aggregate(
                 session, Ledger, Ledger.created_at,
-                [Ledger.reference.like('refund:%'), Ledger.delta_units > 0],
+                [or_(Ledger.reference.like('refund:%'), Ledger.reference.like('delivery-refund:%')),
+                 Ledger.delta_units > 0],
                 (Ledger.delta_units,))
             sales_refund_total, sales_refund_days = aggregate(
                 session, Ledger, Ledger.created_at,
-                [Ledger.reference.like('refund:%'), Ledger.delta_units > 0,
-                 Order.delivered_at.is_not(None)],
+                [or_(Ledger.reference.like('refund:%'), Ledger.reference.like('delivery-refund:%')),
+                 Ledger.delta_units > 0, Order.delivered_at.is_not(None)],
                 (Ledger.delta_units,),
-                joined=(Order, Ledger.reference == (literal('refund:') + Order.id)))
+                joined=(Order, or_(Ledger.reference == (literal('refund:') + Order.id),
+                    Ledger.reference.like(literal('delivery-refund:') + Order.id + literal(':%')))))
             binance_total, binance_days = aggregate(
                 session, Payment, Payment.occurred_at,
                 [Payment.status == 'paid', Payment.currency == 'USDT'],
@@ -235,8 +275,8 @@ class AppService:
                 joined=(BankTopup, BankPayment.topup_id == BankTopup.id))
 
             totals = {
-                'emails_delivered': int(order_total[0] or 0),
-                'credits_sold_units': int(order_total[1] or 0),
+                'emails_delivered': int(order_total[0] or 0) + int(partial_total[0] or 0),
+                'credits_sold_units': int(order_total[1] or 0) + int(partial_total[1] or 0),
                 'credits_refunded_units': int(refund_total[0] or 0),
                 'credits_refunded_sales_units': int(sales_refund_total[0] or 0),
                 'binance_received_units': int(binance_total[0] or 0),
@@ -249,13 +289,19 @@ class AppService:
 
         daily = {}
 
-        def add_days(rows, value_keys):
+        def add_days(rows, value_keys, *, additive=False):
             for row in rows:
                 day = date.fromisoformat(row[0]) if isinstance(row[0], str) else row[0]
                 values = daily.setdefault(day, dict(zeros))
-                values.update(dict(zip(value_keys, (int(value or 0) for value in row[1:]), strict=True)))
+                updates = dict(zip(value_keys, (int(value or 0) for value in row[1:]), strict=True))
+                if additive:
+                    for key, value in updates.items():
+                        values[key] += value
+                else:
+                    values.update(updates)
 
         add_days(order_days, ('emails_delivered', 'credits_sold_units'))
+        add_days(partial_days, ('emails_delivered', 'credits_sold_units'), additive=True)
         add_days(refund_days, ('credits_refunded_units',))
         add_days(sales_refund_days, ('credits_refunded_sales_units',))
         add_days(binance_days, ('binance_received_units', 'binance_credits_units'))
@@ -265,7 +311,7 @@ class AppService:
         if all_time:
             truncated = (len(daily) > 30
                          or any(len(rows) > 30 for rows in
-                                (order_days, refund_days, binance_days, bank_days)))
+                                (order_days, partial_days, refund_days, binance_days, bank_days)))
             daily_rows = []
             for day, values in sorted(daily.items())[-30:]:
                 row = {'date': day, **values}
@@ -583,6 +629,27 @@ class AppService:
                 raise DomainError('Order not found')
             return self._order(session, order)
 
+    def request_order_resend(self, user_id, order_id, resend_key):
+        positive_id(user_id)
+        globals()['request_key'](resend_key)
+        with self.factory.begin() as session:
+            order = session.scalar(select(Order).where(Order.id == order_id).with_for_update())
+            if order is None or order.user_id != user_id:
+                raise DomainError('Order not found')
+            if order.status != 'delivered':
+                raise DomainError('ส่งซ้ำได้เฉพาะรายการที่ส่งสำเร็จแล้ว')
+            active = session.scalar(select(Outbox.id).where(
+                Outbox.topic.in_(('telegram_order', 'telegram_text', 'telegram_document')),
+                Outbox.payload['order_id'].as_string() == order_id,
+                Outbox.status.in_(('pending', 'processing'))).limit(1))
+            if active:
+                raise DomainError('รายการส่งซ้ำกำลังดำเนินการอยู่ กรุณารอสักครู่')
+            self._enqueue(session, 'telegram_order', {
+                'order_id': order.id, 'user_id': user_id,
+                'delivery_mode': 'resend', 'refund_eligible': False},
+                f'resend:{order_id}:{resend_key}')
+            return {'order_id': order.id, 'status': order.status}
+
     def history(self, user_id):
         with self.factory() as session:
             self._user(session, user_id)
@@ -800,15 +867,22 @@ class AppService:
         with self.factory() as session:
             return [dto(row) for row in session.scalars(select(Payment).order_by(Payment.occurred_at.desc()))]
 
-    def _mark_order_delivered(self, session, order_id):
+    def _finalize_order_delivery(self, session, order_id):
         order = session.scalar(select(Order).where(Order.id == order_id).with_for_update())
-        if order is None or order.status in ('refunded', 'delivered'):
+        if order is None or order.status in ('refunded', 'delivered', 'failed', 'partial_failed'):
             return
         rows = list(session.scalars(select(Outbox).where(
             Outbox.topic.in_(['telegram_order', 'telegram_text', 'telegram_document']),
             Outbox.payload['order_id'].as_string() == order_id)))
-        parts = [row for row in rows if row.topic != 'telegram_order']
-        if parts and all(row.status == 'done' for row in rows):
+        parents = [row for row in rows if row.topic == 'telegram_order']
+        email_parts = [row for row in rows if row.topic == 'telegram_text'
+                       and row.payload.get('delivery_kind') != 'summary'
+                       and row.payload.get('refund_eligible') is True]
+        if (not parents or any(row.status != 'done' for row in parents) or not email_parts
+                or any(row.status not in ('done', 'failed') for row in email_parts)):
+            return
+        failed_parts = [row for row in email_parts if row.status == 'failed']
+        if not failed_parts:
             order.status = 'delivered'
             order.delivered_at = utcnow()
             user = session.get(User, order.user_id)
@@ -818,10 +892,57 @@ class AppService:
                     'quantity': order.quantity, 'total_units': order.total_units,
                     'balance_units': order.balance_units, 'status': 'success'},
                     'discord_order:' + order.id)
+            return
+
+        failed_count = sum(row.payload['email_count'] for row in failed_parts
+                           if type(row.payload.get('email_count')) is int
+                           and row.payload['email_count'] > 0)
+        if not 0 < failed_count <= order.quantity:
+            return
+        refund_rows = []
+        for row in failed_parts:
+            reference = f'delivery-refund:{order.id}:{row.id}'
+            ledger = session.scalar(select(Ledger).where(Ledger.reference == reference))
+            if ledger and ledger.delta_units > 0:
+                refund_rows.append((row, ledger))
+        refunded_count = sum(row.payload['email_count'] for row, _ in refund_rows)
+        refund_units = sum(ledger.delta_units for _, ledger in refund_rows)
+        review_required = refunded_count != failed_count
+        order.status = ('delivery_review' if review_required else
+                        'failed' if failed_count == order.quantity else 'partial_failed')
+        if order.status == 'partial_failed':
+            order.delivered_at = utcnow()
+        user = session.get(User, order.user_id)
+        self._enqueue(session, 'telegram_delivery_failure', {
+            'order_id': order.id, 'user_id': user.id, 'failed_emails': failed_count,
+            'refund_units': refund_units, 'refund_applied': bool(refund_units),
+            'review_required': review_required,
+            'balance_units': user.balance_units},
+            'telegram_delivery_failure:' + order.id)
+        if user.id not in self.admin_ids:
+            self._enqueue(session, 'discord_order', {
+                'order_id': order.id, 'user_id': user.id, 'user_name': user.name,
+                'quantity': failed_count, 'total_units': refund_units,
+                'balance_units': user.balance_units, 'status': 'failed',
+                'failure_reason': 'Telegram rejected email delivery'},
+                'discord_order:delivery-failed:' + order.id)
+
+    @staticmethod
+    def _email_failure_refund_eligible(session, row, order):
+        eligibility = row.payload.get('refund_eligible')
+        if type(eligibility) is bool:
+            return eligibility
+        match = re.match(r'^delivery:(\d+):text:\d+$', row.dedupe_key)
+        if not match:
+            return False
+        parent = session.get(Outbox, int(match.group(1)))
+        return bool(parent and parent.topic == 'telegram_order'
+                    and parent.payload.get('order_id') == order.id
+                    and parent.dedupe_key == 'telegram_order:' + order.id)
 
     def mark_order_delivered(self, order_id):
         with self.factory.begin() as session:
-            self._mark_order_delivered(session, order_id)
+            self._finalize_order_delivery(session, order_id)
 
     def record_payment(self, transaction_id, amount_units, currency, occurred_at, receiver_id='', order_type='C2C'):
         if not isinstance(transaction_id, str) or not transaction_id or len(transaction_id) > 256:
@@ -889,7 +1010,8 @@ class AppService:
                 Outbox.status != 'done').values(
                     status='done', lease_token=None,
                     last_error='Superseded by final order status notification'))
-            rows = list(session.scalars(select(Outbox).where(Outbox.status != 'done', Outbox.available_at <= now)
+            rows = list(session.scalars(select(Outbox).where(
+                        Outbox.status.in_(('pending', 'processing')), Outbox.available_at <= now)
                         .order_by(Outbox.id).limit(limit).with_for_update(skip_locked=True)))
             for row in rows:
                 row.status = 'processing'
@@ -898,13 +1020,25 @@ class AppService:
                 row.lease_token = str(uuid4())
             return [dto(row) for row in rows]
 
-    def finish_outbox(self, id, success, error='', retry_seconds=30, lease_token=None):
+    def finish_outbox(self, id, success, error='', retry_seconds=30, lease_token=None,
+                      permanent_failure=False, delivery_kind='', email_count=None,
+                      refund_eligible=None):
+        if (type(permanent_failure) is not bool or (success and permanent_failure)
+                or delivery_kind not in ('', 'email', 'summary')
+                or (refund_eligible is not None and type(refund_eligible) is not bool)
+                or (delivery_kind == 'email'
+                    and (type(email_count) is not int or not 1 <= email_count <= 10000))
+                or (delivery_kind != 'email' and email_count is not None)):
+            raise DomainError('Invalid delivery failure state')
         with self.factory.begin() as session:
             initial = session.get(Outbox, id)
             if initial is None:
                 raise DomainError('Notification not found')
             if initial.topic in ('telegram_order', 'telegram_text', 'telegram_document'):
-                session.scalar(select(Order).where(Order.id == initial.payload.get('order_id')).with_for_update())
+                original = session.get(Order, initial.payload.get('order_id'))
+                if original is not None:
+                    self._user(session, original.user_id, True)
+                    session.scalar(select(Order).where(Order.id == original.id).with_for_update())
             row = session.scalar(select(Outbox).where(Outbox.id == id).with_for_update()
                                  .execution_options(populate_existing=True))
             if row is None:
@@ -914,11 +1048,45 @@ class AppService:
             if (row.status != 'processing' or not lease_token or row.lease_token != lease_token
                     or aware(row.available_at) <= utcnow()):
                 return False
-            row.status = 'done' if success else 'pending'
+            if delivery_kind:
+                if row.topic != 'telegram_text':
+                    raise DomainError('Invalid delivery part type')
+                row.payload = {**row.payload, 'delivery_kind': delivery_kind}
+                if delivery_kind == 'email':
+                    row.payload = {**row.payload, 'email_count': email_count}
+                    eligible = refund_eligible
+                    if eligible is None:
+                        order_for_email = session.get(Order, row.payload.get('order_id'))
+                        eligible = bool(order_for_email and self._email_failure_refund_eligible(
+                            session, row, order_for_email))
+                    row.payload = {**row.payload, 'refund_eligible': eligible}
+            row.status = 'done' if success else ('failed' if permanent_failure else 'pending')
             row.lease_token = None
-            row.last_error = '' if success else 'Delivery failed; retry scheduled'
+            row.last_error = '' if success else (
+                'Delivery permanently rejected' if permanent_failure else 'Delivery failed; retry scheduled')
             row.available_at = utcnow() + timedelta(seconds=max(0, min(retry_seconds, 86400)))
-            if success and row.topic in ('telegram_order', 'telegram_text', 'telegram_document'):
+            if (permanent_failure and row.topic == 'telegram_text'
+                    and row.payload.get('delivery_kind') == 'email'):
+                order = session.scalar(select(Order).where(
+                    Order.id == row.payload.get('order_id')).with_for_update())
+                email_count = row.payload.get('email_count')
+                if (order is not None and row.payload.get('user_id') == order.user_id
+                        and type(email_count) is int and 0 < email_count <= order.quantity):
+                    if self._email_failure_refund_eligible(session, row, order):
+                        reference = f'delivery-refund:{order.id}:{row.id}'
+                        if session.scalar(select(Ledger).where(Ledger.reference == reference)) is None:
+                            user = self._user(session, order.user_id, True)
+                            self._ledger(session, user, email_count * order.price_units, reference,
+                                         'Automatic refund for undelivered email', 'system:delivery')
+                    else:
+                        user = self._user(session, order.user_id, True)
+                        self._enqueue(session, 'telegram_delivery_failure', {
+                            'order_id': order.id, 'user_id': user.id,
+                            'failed_emails': email_count, 'refund_units': 0,
+                            'refund_applied': False, 'review_required': order.status != 'delivered',
+                            'balance_units': user.balance_units},
+                            f'telegram_delivery_failure:{order.id}:part:{row.id}')
+            if row.topic in ('telegram_order', 'telegram_text', 'telegram_document'):
                 session.flush()
-                self._mark_order_delivered(session, row.payload.get('order_id'))
+                self._finalize_order_delivery(session, row.payload.get('order_id'))
             return True

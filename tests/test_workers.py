@@ -72,11 +72,15 @@ class FakeService:
         return self.jobs
     def get_order(self, user_id, order_id):
         return {'id': order_id, 'user_id': user_id, 'emails': ['a@example.org', 'b@example.org'],
-                'quantity': 2, 'total_units': 60000000, 'balance_units': 40000000}
+                'quantity': 2, 'total_units': 60000000, 'balance_units': 40000000,
+                'status': 'delivered'}
     def enqueue(self, topic, payload, dedupe_key):
         self.enqueued.append((topic, payload, dedupe_key))
-    def finish_outbox(self, job_id, success, error='', retry_seconds=30, lease_token=None):
-        self.finished.append((job_id, success, error, retry_seconds))
+    def finish_outbox(self, job_id, success, error='', retry_seconds=30, lease_token=None,
+                      permanent_failure=False, delivery_kind='', email_count=None,
+                      refund_eligible=None):
+        self.finished.append((job_id, success, error, retry_seconds, permanent_failure,
+                              delivery_kind, email_count, refund_eligible))
     def mark_order_delivered(self, order_id):
         pass
 
@@ -88,7 +92,24 @@ def test_order_expands_one_file_and_all_text_idempotent_keys():
     assert [topic for topic, _, _ in service.enqueued].count('telegram_document') == 1
     messages = [payload['text'] for topic, payload, _ in service.enqueued if topic == 'telegram_text']
     assert 'a@example.org\nb@example.org' in messages
+    email_part = next(payload for topic, payload, _ in service.enqueued
+                      if topic == 'telegram_text' and payload.get('delivery_kind') == 'email')
+    assert email_part['email_count'] == 2
+    assert any(payload.get('delivery_kind') == 'summary'
+               for topic, payload, _ in service.enqueued if topic == 'telegram_text')
     assert service.finished[0][1] is True
+
+
+def test_resend_expansion_marks_all_email_parts_non_refundable():
+    service = FakeService([{'id': 12, 'topic': 'telegram_order', 'dedupe_key': 'resend:o:key',
+        'payload': {'order_id': 'o', 'user_id': 42, 'delivery_mode': 'resend',
+                    'refund_eligible': False}, 'attempts': 1}])
+    worker = OutboxWorker(service, SimpleNamespace(), SimpleNamespace())
+    asyncio.run(worker.run_once())
+    email_parts = [payload for topic, payload, _ in service.enqueued
+                   if topic == 'telegram_text' and payload.get('delivery_kind') == 'email']
+    assert email_parts
+    assert all(part['refund_eligible'] is False for part in email_parts)
 
 
 def test_transport_error_retries_same_part_without_purchase():
@@ -100,7 +121,40 @@ def test_transport_error_retries_same_part_without_purchase():
     asyncio.run(OutboxWorker(service, bot, discord).run_once())
     assert service.finished[0][1] is False
     assert 'sensitive' not in service.finished[0][2]
+    assert service.finished[0][4] is False
     discord.send.assert_not_called()
+
+
+def test_permanent_telegram_rejection_marks_failure_as_terminal():
+    from unittest.mock import Mock
+
+    from aiogram.exceptions import TelegramBadRequest
+    from aiogram.methods import SendMessage
+
+    service = FakeService([{'id': 9, 'topic': 'telegram_text', 'payload': {
+        'user_id': 42, 'order_id': 'o', 'text': 'a@example.org\nb@example.org'},
+        'attempts': 1, 'lease_token': 'lease'}])
+    bad_request = TelegramBadRequest(method=SendMessage(chat_id=42, text='x'), message='chat not found')
+    bot = SimpleNamespace(send_message=AsyncMock(side_effect=bad_request))
+    asyncio.run(OutboxWorker(service, bot, Mock()).run_once())
+    assert service.finished[0][1] is False
+    assert service.finished[0][2] == 'TelegramBadRequest'
+    assert service.finished[0][4] is True
+    assert service.finished[0][5:] == ('email', 2, None)
+
+
+def test_delivery_failure_notice_reports_refund_without_email_content():
+    service = FakeService([{'id': 10, 'topic': 'telegram_delivery_failure', 'payload': {
+        'user_id': 42, 'order_id': 'o', 'failed_emails': 2,
+        'refund_units': 60_000_000, 'refund_applied': True,
+        'balance_units': 120_000_000}, 'attempts': 1}])
+    bot = SimpleNamespace(send_message=AsyncMock())
+    asyncio.run(OutboxWorker(service, bot, SimpleNamespace()).run_once())
+    text = bot.send_message.call_args.kwargs['text']
+    assert 'ส่งเมลไม่สำเร็จ 2 รายการ' in text
+    assert 'คืนเครดิต 0.6 credit แล้ว' in text
+    assert 'ยอดคงเหลือ 1.2 credit' in text
+    assert '@' not in text
 
 
 def test_file_delivery_contains_only_email_lines():

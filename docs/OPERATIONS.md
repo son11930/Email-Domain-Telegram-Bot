@@ -47,9 +47,11 @@ Supabase Table Editor เหมาะสำหรับดูและตรว�
 
 ## Telegram/Discord ส่งไม่สำเร็จ
 
-ตรวจ outbox และ last error ผู้ใช้ต้องเริ่มแชทและไม่ block bot งานหลัง commit retry ต้องใช้ order เดิม ถ้าส่งถึงบางส่วนแล้วห้ามซื้อใหม่เพื่อส่งส่วนที่ขาด หาก API timeout อาจมีข้อความซ้ำได้ รหัส order ช่วยเทียบรายการเดิม
+งานส่งอีเมลใน outbox แยกจากข้อความสรุปและไฟล์สำรองแล้ว เมื่อ Telegram ปฏิเสธข้อความอย่างชัดเจน (เช่น Bad Request หรือผู้ใช้ block bot) ระบบจะปิดเฉพาะส่วนนั้น คืนเครดิตตามจำนวนอีเมลในส่วนนั้น และแจ้งผู้ซื้อโดยไม่แสดงเนื้อหาเมล; ออเดอร์จะแสดง `failed` หรือ `partial_failed` ในหน้าเว็บ หากผู้ใช้ block bot จะส่งข้อความแจ้งกลับไม่ได้ แต่สถานะและ ledger ยังคงตรวจสอบได้ใน dashboard
 
-Discord order จะแจ้ง success หลังส่งอีเมลครบ และแจ้งไม่สำเร็จเมื่อมีการคืนเครดิต/ยกเลิกรายการ; ข้อผิดพลาดส่ง Telegram/Discord ชั่วคราวจะ retry จึงยังไม่ถือเป็นผลล้มเหลวถาวร Discord ตอบ 429 ให้ worker เคารพ retry-after ถ้า webhook ถูกลบให้สร้างใหม่ในห้องเดิม เปลี่ยน env แล้ว restart unit ที่เกี่ยวข้องด้วย `sudo systemctl restart team-mail@worker.service` ไม่ควรคืนเครดิตเพียงเพราะ notification ส่งไม่ได้
+ข้อผิดพลาดเครือข่าย, timeout, rate limit และ server error ยัง retry ต่อ เพราะ Telegram อาจรับข้อความแล้วแม้ worker ไม่ได้รับคำตอบ ระบบจะไม่คืนเครดิตจากผลส่งที่คลุมเครือ การส่งบางส่วนจะคืนเฉพาะจำนวนที่ Telegram ปฏิเสธ; ห้าม refund ทั้งออเดอร์หรือกด resend ออเดอร์สถานะ failed/partial_failed เพราะอาจส่งอีเมลที่ส่งถึงแล้วซ้ำ
+
+Discord order จะแจ้ง success หลังส่งอีเมลครบ และแจ้ง failed เมื่อมีการคืนเครดิตจากการปฏิเสธส่งอีเมล; ข้อผิดพลาดส่ง Telegram/Discord ชั่วคราวจะ retry จึงยังไม่ถือเป็นผลล้มเหลวถาวร Discord ตอบ 429 ให้ worker เคารพ retry-after ถ้า webhook ถูกลบให้สร้างใหม่ในห้องเดิม เปลี่ยน env แล้ว restart unit ที่เกี่ยวข้องด้วย `sudo systemctl restart team-mail@worker.service` ไม่ควรคืนเครดิตเพียงเพราะ notification ส่งไม่ได้
 
 ## Backup และกู้คืน
 

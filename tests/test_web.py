@@ -205,7 +205,7 @@ def test_reports_are_admin_only_and_show_separate_sales_and_payment_currencies()
 @pytest.mark.parametrize('query', [
     'period=unknown',
     'period=custom&start_date=2026-10-24&end_date=2026-10-23',
-    'period=custom&start_date=2026-10-24&end_date=2026-10-25',
+    'period=custom&start_date=2099-10-24&end_date=2099-10-25',
     'period=custom&start_date=10-24&end_date=2026-10-24',
 ])
 def test_reports_reject_invalid_date_filters(query):

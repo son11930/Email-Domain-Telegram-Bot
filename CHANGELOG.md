@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] - 2026-10-24
 
 ### Added
+- Added explicit Telegram delivery failure handling for definite first-send rejections: refund only the rejected email count, notify the buyer with order/refund/balance details, and show failed or partial failure in the dashboard/report. Transient or ambiguous errors continue retrying without a refund; resends cannot refund an already delivered order.
 - Added an admin sales report with Bangkok date filters, daily and all-time summaries, delivered email and credit totals, refunds, and separate actual bank THB and Binance USDT receipts.
 - Added an indexed `orders.delivered_at` timestamp, set after successful delivery, with a one-time backfill for legacy delivered orders. Historical refunded orders without delivery evidence remain excluded from net sales.
 - Added a 30-activity-day display cap for all-time reports while retaining full-range totals.

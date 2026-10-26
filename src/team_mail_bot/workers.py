@@ -7,6 +7,7 @@ from decimal import Decimal
 from urllib.parse import urlparse
 
 import httpx
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.types import BufferedInputFile
 
 LOG = logging.getLogger(__name__)
@@ -96,24 +97,44 @@ class OutboxWorker:
     def __init__(self, service, bot, discord):
         self.service, self.bot, self.discord = service, bot, discord
 
+    async def _classify_legacy_text_job(self, job: dict) -> dict:
+        data = job['payload']
+        if job['topic'] != 'telegram_text' or data.get('delivery_kind'):
+            return job
+        order = await asyncio.to_thread(self.service.get_order, data['user_id'], data['order_id'])
+        email_parts = split_email_lines(order['emails'])
+        if data.get('text') in email_parts:
+            metadata = {'delivery_kind': 'email',
+                        'email_count': len(data['text'].splitlines())}
+        else:
+            metadata = {'delivery_kind': 'summary'}
+        return {**job, 'payload': {**data, **metadata}}
+
     async def _expand_order(self, job: dict) -> None:
         data = job['payload']
         order = await asyncio.to_thread(self.service.get_order, data['user_id'], data['order_id'])
-        if order.get('status') == 'refunded':
+        is_resend = (data.get('delivery_mode') == 'resend'
+                     or job.get('dedupe_key', '').startswith('resend:'))
+        if (is_resend and order.get('status') != 'delivered'
+                or not is_resend and order.get('status') in ('refunded', 'failed', 'partial_failed')):
             return
         prefix = f"delivery:{job['id']}:"
-        base = {'user_id': data['user_id'], 'order_id': data['order_id']}
+        base = {'user_id': data['user_id'], 'order_id': data['order_id'],
+                'delivery_mode': 'resend' if is_resend else 'initial',
+                'refund_eligible': not is_resend}
         if len(order['emails']) > 1:
             await asyncio.to_thread(self.service.enqueue, 'telegram_document',
                 {**base, 'emails': order['emails']}, prefix + 'file')
         for index, part in enumerate(split_email_lines(order['emails'])):
+            email_count = len(part.splitlines())
             await asyncio.to_thread(self.service.enqueue, 'telegram_text',
-                {**base, 'text': part}, prefix + f'text:{index}')
+                {**base, 'delivery_kind': 'email', 'email_count': email_count, 'text': part},
+                prefix + f'text:{index}')
         summary = (f"✅ รายการ {order['id']}\n"
                    f"หัก {credits(order['total_units'])} credit\n"
                    f"ยอดเหลือหลังรายการ {credits(order['balance_units'])} credit")
         await asyncio.to_thread(self.service.enqueue, 'telegram_text',
-            {**base, 'text': summary}, prefix + 'summary')
+            {**base, 'delivery_kind': 'summary', 'text': summary}, prefix + 'summary')
 
     async def _deliver(self, job: dict) -> None:
         topic, data = job['topic'], job['payload']
@@ -129,6 +150,29 @@ class OutboxWorker:
             await self.bot.send_document(chat_id=data['user_id'], document=document)
         elif topic == 'telegram_text':
             await self.bot.send_message(chat_id=data['user_id'], text=data['text'], parse_mode=None)
+        elif topic == 'telegram_delivery_failure':
+            refund = credits(data['refund_units'])
+            balance = credits(data['balance_units'])
+            count = data['failed_emails']
+            if data.get('refund_applied') and data.get('review_required'):
+                text = (f"⚠️ รายการ {data['order_id']} ส่งเมลไม่สำเร็จ {count} รายการ\n"
+                        f"คืนเครดิตที่ยืนยันได้ {refund} credit แล้ว\n"
+                        'ยังมีส่วนที่ต้องตรวจสอบ กรุณาติดต่อแอดมิน\n'
+                        f"ยอดคงเหลือ {balance} credit")
+            elif data.get('refund_applied'):
+                text = (f"❌ รายการ {data['order_id']} ส่งเมลไม่สำเร็จ {count} รายการ\n"
+                        f"คืนเครดิต {refund} credit แล้ว\n"
+                        f"ยอดคงเหลือ {balance} credit\n"
+                        'เครดิตส่วนที่ส่งไม่สำเร็จคืนแล้ว หากต้องการเมลเพิ่มเติมสามารถสั่งใหม่ได้')
+            elif data.get('review_required'):
+                text = (f"⚠️ รายการ {data['order_id']} ส่งเมลไม่สำเร็จ {count} รายการ\n"
+                        'ยังไม่ได้คืนเครดิตอัตโนมัติ กรุณาติดต่อแอดมินเพื่อตรวจสอบ\n'
+                        f"ยอดคงเหลือ {balance} credit")
+            else:
+                text = (f"⚠️ ส่งซ้ำรายการ {data['order_id']} ไม่สำเร็จ {count} รายการ\n"
+                        'เครดิตไม่มีการเปลี่ยนแปลง\n'
+                        f"ยอดคงเหลือ {balance} credit")
+            await self.bot.send_message(chat_id=data['user_id'], text=text, parse_mode=None)
         elif topic == 'telegram_topup':
             text = (f"✅ เติมเครดิตสำเร็จ\nรายการ {data['topup_id']}\n"
                     f"เพิ่ม {credits(data['amount_units'])} credit\n"
@@ -145,6 +189,7 @@ class OutboxWorker:
         jobs = await asyncio.to_thread(self.service.claim_outbox, limit=1)
         for job in jobs:
             try:
+                job = await self._classify_legacy_text_job(job)
                 await self._deliver(job)
             except Exception as exc:  # noqa: BLE001 - persist only safe error class and retry.
                 # Never persist transport exceptions: Telegram tokens, webhook URLs
@@ -153,9 +198,17 @@ class OutboxWorker:
                     min(3600, 2 ** min(job['attempts'], 10) * 5)))
                 await asyncio.to_thread(self.service.finish_outbox, job['id'], False,
                                         error=type(exc).__name__, retry_seconds=int(delay),
-                                        lease_token=job.get('lease_token'))
+                                        lease_token=job.get('lease_token'),
+                                        delivery_kind=job['payload'].get('delivery_kind', ''),
+                                        email_count=job['payload'].get('email_count'),
+                                        refund_eligible=job['payload'].get('refund_eligible'),
+                                        permanent_failure=isinstance(
+                                            exc, (TelegramBadRequest, TelegramForbiddenError)))
                 LOG.warning('Outbox delivery deferred: %s', type(exc).__name__)
             else:
                 await asyncio.to_thread(self.service.finish_outbox, job['id'], True,
-                                        lease_token=job.get('lease_token'))
+                                        lease_token=job.get('lease_token'),
+                                        delivery_kind=job['payload'].get('delivery_kind', ''),
+                                        email_count=job['payload'].get('email_count'),
+                                        refund_eligible=job['payload'].get('refund_eligible'))
         return len(jobs)

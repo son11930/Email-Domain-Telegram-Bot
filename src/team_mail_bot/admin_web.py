@@ -86,7 +86,9 @@ def web_status(value):
     return {
         'pending': 'รอโอน', 'expired': 'หมดเวลา', 'cancelled': 'ยกเลิก',
         'paid': 'สำเร็จ', 'needs_review': 'รอตรวจสอบ', 'delivered': 'ส่งแล้ว',
-        'refunded': 'คืนเครดิตแล้ว', 'failed': 'ไม่สำเร็จ', 'available': 'พร้อมขาย',
+        'refunded': 'คืนเครดิตแล้ว', 'failed': 'ส่งไม่สำเร็จ (คืนเครดิตแล้ว)',
+        'partial_failed': 'ส่งบางส่วน (คืนเครดิตเฉพาะเมลที่ส่งไม่ได้)', 'available': 'พร้อมขาย',
+        'delivery_review': 'ส่งไม่สำเร็จ (รอตรวจเครดิต)',
         'allocated': 'ขายแล้ว', 'deleted': 'ลบแล้ว', 'processing': 'กำลังดำเนินการ',
     }.get(value, str(value))
 
