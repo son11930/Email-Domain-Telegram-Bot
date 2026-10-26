@@ -1,8 +1,16 @@
 # Project Plan
 
+## งานติดตาม: แก้หน้า Reports PostgreSQL GroupingError และตรวจสอบรายการ Telegram 19:08
+
+- สถานะ: แก้และ review แล้ว; กำลัง deploy (2026-10-26)
+- เป้าหมาย: แก้ `/reports` ที่ตอบ Internal Server Error และอธิบายว่ารายการ Telegram เวลา 19:08 ที่ผู้ใช้เห็นแต่ไม่เห็นเป็นแถวใหม่ใน `/orders` คืออะไร
+- หลักฐาน: web log บน VPS ระบุ PostgreSQL `GroupingError` ใน partial-delivery aggregation เพราะ SELECT/GROUP BY สร้าง JSON `order_id` expression แยกกัน; ภาพ `/orders` แสดง order ID `a446…` ที่เวลา 18:52:49 และ ID ใหม่ `1a974…` ที่ 19:10:28 ขณะที่ข้อความ Telegram 19:08 อ้าง ID `a446…` เดิม
+- แผน: เพิ่ม regression test ให้ยืนยันว่า SQLAlchemy ใช้ bind expression เดียวกันใน SELECT/GROUP BY; แก้ query โดยสร้าง expression เดียวแล้ว reuse; ทดสอบชุดที่เกี่ยวข้องและ full suite; deploy ผ่าน `bot-manager.bat` และตรวจ status/services กับ `/reports`
+- ความเสี่ยง: PostgreSQL integration tests ต้องใช้ test database แยก ห้ามใช้ production database เพื่อรัน tests; อย่าถือข้อความ Telegram ที่อ้าง ID เก่าว่าเป็นการสร้าง order ใหม่
+
 ## งานเพิ่มเติม: แจ้งส่งเมลไม่สำเร็จและคืนเครดิตเฉพาะส่วน
 
-- สถานะ: เสร็จใน working tree (2026-10-26); ยังไม่ได้ deploy
+- สถานะ: deploy ผ่าน bot-manager แล้ว (2026-10-26); bot/worker/web active
 - เป้าหมาย: แจ้งผู้ซื้อเมื่อ Telegram ปฏิเสธการส่งอีเมลอย่างชัดเจน และคืนเครดิตเฉพาะจำนวนเมลที่ไม่ได้ส่ง; แสดงสถานะไม่สำเร็จใน dashboard
 - ขอบเขต: แยก outbox ของเนื้อหาอีเมลออกจากข้อความสรุป/ไฟล์สำรอง; retry ความผิดพลาดชั่วคราวหรือผลลัพธ์คลุมเครือ; ห้ามคืนเต็มเมื่อส่งบางส่วนแล้ว; ป้องกัน resend ของออเดอร์ที่คืนเครดิตแล้ว
 - วิธีทำ: เพิ่ม metadata จำนวนเมล/สิทธิ์คืนเครดิตต่อ outbox part, ปิดงานเฉพาะการ reject ถาวร, refund ledger แบบ idempotent ต่อ part, แจ้งยอดคืน/ยอดคงเหลือ และ final order state เมื่อ email part จบ; แยกการส่งซ้ำซึ่งคืนเครดิตไม่ได้และกันคำขอซ้ำขณะงานยัง active; ปรับรายงานคืนเครดิต/ส่งบางส่วน

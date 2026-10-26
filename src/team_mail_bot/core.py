@@ -98,14 +98,15 @@ def _report_daily_query(model, timestamp, dialect, metrics, *, limit):
 
 
 def _partial_email_jobs():
-    return (select(Outbox.payload['order_id'].as_string().label('order_id'),
+    order_id_expression = Outbox.payload['order_id'].as_string()
+    return (select(order_id_expression.label('order_id'),
                    func.sum(case((Outbox.status == 'done',
                                   Outbox.payload['email_count'].as_integer()), else_=0))
                    .label('delivered_count'))
             .where(Outbox.topic == 'telegram_text',
                    Outbox.payload['delivery_kind'].as_string() == 'email',
                    Outbox.payload['refund_eligible'].as_boolean().is_(True))
-            .group_by(Outbox.payload['order_id'].as_string()).subquery())
+            .group_by(order_id_expression).subquery())
 
 
 def _report_partial_delivery_query(session, start_utc, end_utc, *, limit, dialect=None):

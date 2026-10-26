@@ -248,11 +248,14 @@ def test_partial_delivery_report_query_compiles_for_postgresql(service):
     with service.factory() as session:
         query = _report_partial_delivery_query(session, None, None, limit=31,
                                                dialect='postgresql')
-    compiled = str(query.compile(dialect=postgresql.dialect()))
+    compiled_query = query.compile(dialect=postgresql.dialect())
+    compiled = str(compiled_query)
 
     assert 'GROUP BY date(timezone(' in compiled
     assert 'delivery_outbox' in compiled
-    params = query.compile(dialect=postgresql.dialect()).params
+    assert [name for name, value in compiled_query.params.items() if value == 'order_id'] == [
+        'payload_1']
+    params = compiled_query.params
     assert ['partial_failed', 'delivery_review'] in params.values()
 
 def test_topup_once_and_never_reuse(service):
